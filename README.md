@@ -1,4 +1,4 @@
-# LD Scripture & LD Lyrics for OBS
+# LD Worship & Word for OBS (Scripture & Lyrics)
 
 Scripture and song lyrics lower thirds for church livestreams, controlled from docks inside OBS. Fully offline.
 
