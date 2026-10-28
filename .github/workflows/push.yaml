@@ -84,7 +84,9 @@ jobs:
             candidates=(*-${variant}-${commit_hash}/@(*|*-dbgsym).@(${suffix}))
 
             for candidate in "${candidates[@]}"; do
-              mv "${candidate}" "${root_dir}"
+              base_name="${candidate##*/}"
+              new_name="${base_name//ld-scripture-/LD-Worship-and-Word-}"
+              mv "${candidate}" "${root_dir}/${new_name}"
             done
           done
 
