@@ -39,6 +39,8 @@ target_sources(
   ${CMAKE_PROJECT_NAME}
   PRIVATE
     src/plugin-main.cpp
+    src/audio-engine.cpp
+    src/audio-engine.hpp
     src/bible.cpp
     src/bible.hpp
     src/display-state.hpp
@@ -50,6 +52,8 @@ target_sources(
     src/lyrics.hpp
     src/lyrics-dock.cpp
     src/lyrics-dock.hpp
+    src/worship-word-dock.cpp
+    src/worship-word-dock.hpp
 )
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 

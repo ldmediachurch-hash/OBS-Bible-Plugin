@@ -25,23 +25,54 @@ the Free Software Foundation; either version 2 of the License, or
 #include <cmath>
 #include <memory>
 #include <mutex>
+#include <string>
 
 namespace {
 
 struct LtSettings {
 	bool isLyrics = false;
-	bool dark = false;
-	bool top = false;
-	bool stacked = false;
-	bool chips = true;
-	bool sample = false;
+
+	// Background style & customization
+	std::string bgStyle = "light"; // "light", "dark", "custom", "transparent", "image"
+	uint32_t customBgColor = 0xFFFFFFFF;
+	int bgOpacity = 100; // 0 to 100%
+	std::string bgImagePath;
+	std::string bgImageFit = "cover"; // "cover", "fit", "stretch"
+	int cornerRadius = 26; // px at 1080p
+
+	// Shadow controls
+	bool enableShadow = true;
+	int shadowOpacity = 100; // 0 to 100%
+
+	// Typography & Font
+	std::string fontFamily = "Inter";
+	std::string fontWeight = "medium"; // "regular", "medium", "semibold", "bold", "extrabold"
 	int fontSize = 40;
 	int maxLines = 3;
+	std::string textAlign = "left"; // "left", "center", "right"
+
+	// Colors
+	bool useCustomColors = false;
+	uint32_t textColor = 0xFF0F1115;
+	uint32_t kickerColor = 0xFF6A707A;
+
+	// Header row controls
+	bool showKicker = true;
+	bool showSignalDot = true;
+
+	// Layout & Placement
+	bool top = false;
+	bool stacked = false; // scripture dual translations
 	int marginX = 96;
 	int marginY = 64;
+
+	// Chips & Metadata
+	bool chips = true; // scripture translation labels
+	bool showCcli = false; // lyrics CCLI
+
+	// Animation & Sample
 	int fadeMs = 300;
-	bool centerAlign = false;
-	bool showCcli = false;
+	bool sample = false;
 };
 
 struct Palette {
@@ -50,13 +81,46 @@ struct Palette {
 
 Palette paletteFor(const LtSettings &s)
 {
-	if (s.dark)
-		return {QColor(15, 17, 21, 240), QColor(255, 255, 255),
-			QColor(163, 169, 178),   QColor(255, 255, 255, 30),
-			QColor(230, 232, 235),   QColor(255, 255, 255, 40),
-			QColor(0, 0, 0)};
-	return {QColor(255, 255, 255), QColor(15, 17, 21),    QColor(106, 112, 122), QColor(241, 242, 244),
-		QColor(62, 68, 77),    QColor(227, 229, 232), QColor(6, 10, 26)};
+	Palette pal;
+	if (s.bgStyle == "dark") {
+		pal = {QColor(15, 17, 21, 240), QColor(255, 255, 255),
+		       QColor(163, 169, 178),   QColor(255, 255, 255, 30),
+		       QColor(230, 232, 235),   QColor(255, 255, 255, 40),
+		       QColor(0, 0, 0)};
+	} else if (s.bgStyle == "transparent") {
+		pal = {QColor(0, 0, 0, 0),     QColor(255, 255, 255),
+		       QColor(230, 232, 235),   QColor(255, 255, 255, 40),
+		       QColor(255, 255, 255),   QColor(255, 255, 255, 40),
+		       QColor(0, 0, 0)};
+	} else if (s.bgStyle == "custom") {
+		QColor bg(s.customBgColor);
+		bool lightBg = bg.lightness() > 128;
+		pal.card = bg;
+		pal.text = lightBg ? QColor(15, 17, 21) : QColor(255, 255, 255);
+		pal.kicker = lightBg ? QColor(106, 112, 122) : QColor(163, 169, 178);
+		pal.chipBg = lightBg ? QColor(241, 242, 244) : QColor(255, 255, 255, 30);
+		pal.chipText = lightBg ? QColor(62, 68, 77) : QColor(230, 232, 235);
+		pal.divider = lightBg ? QColor(227, 229, 232) : QColor(255, 255, 255, 40);
+		pal.shadow = QColor(0, 0, 0);
+	} else {
+		// "light" or "image"
+		pal = {QColor(255, 255, 255), QColor(15, 17, 21),    QColor(106, 112, 122), QColor(241, 242, 244),
+		       QColor(62, 68, 77),    QColor(227, 229, 232), QColor(6, 10, 26)};
+	}
+
+	// Apply card background opacity
+	if (s.bgStyle != "transparent") {
+		int alpha = std::clamp(static_cast<int>(s.bgOpacity * 255 / 100), 0, 255);
+		pal.card.setAlpha(alpha);
+	}
+
+	// Apply custom text/kicker colors if enabled
+	if (s.useCustomColors) {
+		pal.text = QColor(s.textColor);
+		pal.kicker = QColor(s.kickerColor);
+	}
+
+	return pal;
 }
 
 const QColor kSignalRed(255, 45, 45);
@@ -86,6 +150,8 @@ Laid layText(const QString &text, const QFont &font, qreal width, qreal lineHeig
 		qreal lineX = 0;
 		if (align & Qt::AlignHCenter)
 			lineX = std::max<qreal>(0.0, (width - line.naturalTextWidth()) / 2.0);
+		else if (align & Qt::AlignRight)
+			lineX = std::max<qreal>(0.0, width - line.naturalTextWidth());
 		line.setPosition(QPointF(lineX, y + glyphOffset));
 		y += lineHeight;
 		l.lines++;
@@ -95,9 +161,26 @@ Laid layText(const QString &text, const QFont &font, qreal width, qreal lineHeig
 	return l;
 }
 
-QFont makeFont(const char *family, int weight, qreal px)
+int resolveFontWeight(const std::string &w)
 {
-	QFont f(QString::fromUtf8(family));
+	if (w == "bold")
+		return 700;
+	if (w == "semibold")
+		return 600;
+	if (w == "regular")
+		return 400;
+	if (w == "extrabold")
+		return 800;
+	return 500; // Medium
+}
+
+QFont makeFont(const QString &family, int weight, qreal px)
+{
+	QFont f;
+	if (!family.isEmpty() && family != "Inter" && family != "default")
+		f.setFamily(family);
+	else
+		f.setFamily(QStringLiteral("Inter"));
 	f.setPixelSize(std::max(1, static_cast<int>(std::lround(px))));
 	f.setWeight(static_cast<QFont::Weight>(weight));
 	f.setHintingPreference(QFont::PreferNoHinting);
@@ -111,11 +194,11 @@ struct Chip {
 	qreal w = 0, h = 0, padX = 0;
 };
 
-Chip makeChip(const QString &text, qreal scale)
+Chip makeChip(const QString &text, qreal scale, const QString &fontFamily)
 {
 	Chip c;
 	c.text = text;
-	c.font = makeFont("Inter", 600, 15 * scale);
+	c.font = makeFont(fontFamily, 600, 15 * scale);
 	c.font.setLetterSpacing(QFont::AbsoluteSpacing, 0.06 * 15 * scale);
 	QFontMetricsF fm(c.font);
 	c.padX = 11 * scale;
@@ -149,22 +232,31 @@ QImage renderCard(const DisplayContent &content, const LtSettings &s, uint32_t c
 	const qreal colGap = 64 * scale;
 	const qreal colW = twoCols ? (innerW - colGap) / 2 : innerW;
 
+	const QString fontFamily = QString::fromStdString(s.fontFamily);
+	const int fontWeight = resolveFontWeight(s.fontWeight);
+
 	// kicker: red dot + REFERENCE (+ chip when there is one translation or CCLI for lyrics)
-	QFont kicker = makeFont("Inter", 600, 19 * scale);
+	QFont kicker = makeFont(fontFamily, 600, 19 * scale);
 	kicker.setLetterSpacing(QFont::AbsoluteSpacing, 0.16 * 19 * scale);
 	QFontMetricsF kfm(kicker);
-	const qreal kickerH = 28 * scale;
+	const qreal kickerH = s.showKicker ? 28 * scale : 0.0;
+	const qreal kickerGap = s.showKicker ? 14 * scale : 0.0;
 
 	// fit the text: shrink up to 30% before letting the card grow
 	const qreal basePx = s.fontSize * scale;
 	qreal px = basePx;
 	std::vector<Laid> laid;
 	const qreal chipBlock = (!s.isLyrics && s.chips && n > 1) ? 28 * scale + 12 * scale : 0;
-	const Qt::Alignment bodyAlign = (s.isLyrics && s.centerAlign) ? Qt::AlignHCenter : Qt::AlignLeft;
+
+	Qt::Alignment bodyAlign = Qt::AlignLeft;
+	if (s.textAlign == "center")
+		bodyAlign = Qt::AlignHCenter;
+	else if (s.textAlign == "right")
+		bodyAlign = Qt::AlignRight;
 
 	for (;;) {
 		laid.clear();
-		QFont body = makeFont("Inter", 500, px);
+		QFont body = makeFont(fontFamily, fontWeight, px);
 		const qreal lh = px * 1.32;
 		int worst = 0;
 		for (const auto &e : content.entries) {
@@ -185,7 +277,7 @@ QImage renderCard(const DisplayContent &content, const LtSettings &s, uint32_t c
 		for (size_t i = 0; i < laid.size(); i++)
 			contentH += chipBlock + laid[i].height + (i + 1 < laid.size() ? 22 * scale : 0);
 	}
-	const qreal cardH = padTop + kickerH + 14 * scale + contentH + padBottom;
+	const qreal cardH = padTop + kickerH + kickerGap + contentH + padBottom;
 
 	const int imgW = static_cast<int>(std::ceil(cardW + 2 * shadowPad));
 	const int imgH = static_cast<int>(std::ceil(cardH + 2 * shadowPad));
@@ -194,58 +286,106 @@ QImage renderCard(const DisplayContent &content, const LtSettings &s, uint32_t c
 	QPainter p(&img);
 	p.setRenderHint(QPainter::Antialiasing, true);
 	p.setRenderHint(QPainter::TextAntialiasing, true);
+	p.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
 	const QRectF card(shadowPad, shadowPad, cardW, cardH);
-	const qreal radius = 26 * scale;
+	const qreal radius = s.cornerRadius * scale;
 
-	// soft shadow: layered rounded rects, offset downwards
-	const int layers = 22;
-	for (int i = layers; i >= 1; i--) {
-		const qreal spread = i * (shadowPad * 0.85 / layers);
-		QColor c = pal.shadow;
-		const qreal t = 1.0 - static_cast<qreal>(i) / layers;
-		c.setAlphaF(static_cast<float>((s.dark ? 0.05 : 0.028) * t * t + 0.002));
-		QPainterPath sp;
-		sp.addRoundedRect(card.adjusted(-spread, -spread + 14 * scale, spread, spread + 14 * scale),
-				  radius + spread, radius + spread);
-		p.fillPath(sp, c);
+	// Drop shadow
+	if (s.enableShadow && s.bgStyle != "transparent") {
+		const int layers = 22;
+		for (int i = layers; i >= 1; i--) {
+			const qreal spread = i * (shadowPad * 0.85 / layers);
+			QColor c = pal.shadow;
+			const qreal t = 1.0 - static_cast<qreal>(i) / layers;
+			float baseAlpha = (s.bgStyle == "dark") ? 0.05f : 0.028f;
+			float alpha = (baseAlpha * t * t + 0.002f) * (s.shadowOpacity / 100.0f);
+			c.setAlphaF(std::clamp(alpha, 0.0f, 1.0f));
+			QPainterPath sp;
+			sp.addRoundedRect(card.adjusted(-spread, -spread + 14 * scale, spread, spread + 14 * scale),
+					  radius + spread, radius + spread);
+			p.fillPath(sp, c);
+		}
 	}
+
 	QPainterPath cardPath;
 	cardPath.addRoundedRect(card, radius, radius);
-	p.fillPath(cardPath, pal.card);
 
-	// kicker row
+	// Card background
+	if (s.bgStyle == "transparent") {
+		// No background fill (floating text)
+	} else if (s.bgStyle == "image" && !s.bgImagePath.empty()) {
+		QImage bgImg(QString::fromStdString(s.bgImagePath));
+		if (!bgImg.isNull()) {
+			p.save();
+			p.setClipPath(cardPath);
+			if (s.bgOpacity < 100)
+				p.setOpacity(s.bgOpacity / 100.0);
+			if (s.bgImageFit == "stretch") {
+				p.drawImage(card, bgImg);
+			} else if (s.bgImageFit == "fit") {
+				QImage scaled = bgImg.scaled(card.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+				QRectF target((card.width() - scaled.width()) / 2 + card.left(),
+					      (card.height() - scaled.height()) / 2 + card.top(),
+					      scaled.width(), scaled.height());
+				p.drawImage(target, scaled);
+			} else {
+				// cover
+				QImage scaled = bgImg.scaled(card.size().toSize(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+				QRectF target((card.width() - scaled.width()) / 2 + card.left(),
+					      (card.height() - scaled.height()) / 2 + card.top(),
+					      scaled.width(), scaled.height());
+				p.drawImage(target, scaled);
+			}
+			p.restore();
+		} else {
+			p.fillPath(cardPath, pal.card);
+		}
+	} else {
+		p.fillPath(cardPath, pal.card);
+	}
+
 	qreal x = card.left() + padX;
 	qreal y = card.top() + padTop;
-	const qreal dot = 12 * scale;
-	p.setPen(Qt::NoPen);
-	p.setBrush(kSignalRed);
-	p.drawEllipse(QRectF(x, y + (kickerH - dot) / 2, dot, dot));
-	p.setBrush(Qt::NoBrush);
-	p.setFont(kicker);
-	p.setPen(pal.kicker);
-	const QString ref = content.reference.toUpper();
-	const qreal refX = x + dot + 12 * scale;
 
-	if (s.isLyrics) {
-		qreal availW = innerW - (dot + 12 * scale);
-		if (s.showCcli && !content.ccli.trimmed().isEmpty()) {
-			Chip c = makeChip(QStringLiteral("CCLI %1").arg(content.ccli.trimmed()), scale);
-			const qreal chipX = card.right() - padX - c.w;
-			drawChip(p, c, chipX, y + (kickerH - c.h) / 2, pal);
-			availW = std::max<qreal>(0.0, chipX - 14 * scale - refX);
+	// Kicker row (Reference / Song Title)
+	if (s.showKicker) {
+		const qreal dot = 12 * scale;
+		qreal refX = x;
+		if (s.showSignalDot) {
+			p.setPen(Qt::NoPen);
+			p.setBrush(kSignalRed);
+			p.drawEllipse(QRectF(x, y + (kickerH - dot) / 2, dot, dot));
+			p.setBrush(Qt::NoBrush);
+			refX = x + dot + 12 * scale;
 		}
-		p.drawText(QRectF(refX, y, availW, kickerH), Qt::AlignVCenter | Qt::AlignLeft, ref);
-	} else {
-		p.drawText(QRectF(refX, y, innerW, kickerH), Qt::AlignVCenter | Qt::AlignLeft, ref);
-		if (s.chips && n == 1 && !content.entries[0].label.isEmpty()) {
-			Chip c = makeChip(content.entries[0].label, scale);
-			drawChip(p, c, refX + kfm.horizontalAdvance(ref) + 14 * scale, y + (kickerH - c.h) / 2, pal);
+
+		p.setFont(kicker);
+		p.setPen(pal.kicker);
+		const QString ref = content.reference.toUpper();
+
+		Qt::Alignment kickerAlign = Qt::AlignVCenter | (s.textAlign == "center" ? Qt::AlignHCenter : (s.textAlign == "right" ? Qt::AlignRight : Qt::AlignLeft));
+
+		if (s.isLyrics) {
+			qreal availW = innerW - (s.showSignalDot ? (dot + 12 * scale) : 0);
+			if (s.showCcli && !content.ccli.trimmed().isEmpty()) {
+				Chip c = makeChip(QStringLiteral("CCLI %1").arg(content.ccli.trimmed()), scale, fontFamily);
+				const qreal chipX = card.right() - padX - c.w;
+				drawChip(p, c, chipX, y + (kickerH - c.h) / 2, pal);
+				availW = std::max<qreal>(0.0, chipX - 14 * scale - refX);
+			}
+			p.drawText(QRectF(refX, y, availW, kickerH), kickerAlign, ref);
+		} else {
+			p.drawText(QRectF(refX, y, innerW - (refX - x), kickerH), kickerAlign, ref);
+			if (s.chips && n == 1 && !content.entries[0].label.isEmpty()) {
+				Chip c = makeChip(content.entries[0].label, scale, fontFamily);
+				drawChip(p, c, refX + kfm.horizontalAdvance(ref) + 14 * scale, y + (kickerH - c.h) / 2, pal);
+			}
 		}
+		y += kickerH + kickerGap;
 	}
-	y += kickerH + 14 * scale;
 
-	// body text
+	// Body text
 	for (size_t i = 0; i < laid.size(); i++) {
 		qreal cx = x;
 		qreal cy = y;
@@ -253,10 +393,20 @@ QImage renderCard(const DisplayContent &content, const LtSettings &s, uint32_t c
 			cx = x + static_cast<qreal>(i) * (colW + colGap);
 		}
 		if (chipBlock > 0) {
-			Chip c = makeChip(content.entries[i].label, scale);
+			Chip c = makeChip(content.entries[i].label, scale, fontFamily);
 			drawChip(p, c, cx, cy, pal);
 			cy += chipBlock;
 		}
+
+		// Floating text drop shadow for transparent mode
+		if (s.bgStyle == "transparent" && s.enableShadow) {
+			p.save();
+			QColor textShadow(0, 0, 0, static_cast<int>(180 * s.shadowOpacity / 100));
+			p.setPen(textShadow);
+			laid[i].layout->draw(&p, QPointF(cx + 2 * scale, cy + 2 * scale));
+			p.restore();
+		}
+
 		p.setPen(pal.text);
 		laid[i].layout->draw(&p, QPointF(cx, cy));
 		if (!twoCols)
@@ -265,7 +415,7 @@ QImage renderCard(const DisplayContent &content, const LtSettings &s, uint32_t c
 	if (twoCols) {
 		p.setPen(QPen(pal.divider, std::max<qreal>(1.0, 2 * scale)));
 		const qreal dx = x + colW + colGap / 2;
-		p.drawLine(QPointF(dx, card.top() + padTop + kickerH + 14 * scale),
+		p.drawLine(QPointF(dx, card.top() + padTop + kickerH + kickerGap),
 			   QPointF(dx, card.bottom() - padBottom));
 	}
 	p.end();
@@ -323,37 +473,77 @@ DisplayContent sampleLyricsContent()
 	return c;
 }
 
-void readScriptureSettings(LtSettings &s, obs_data_t *d)
+void readCommonSettings(LtSettings &s, obs_data_t *d, bool isLyrics)
 {
-	s.isLyrics = false;
-	s.dark = strcmp(obs_data_get_string(d, "theme"), "dark") == 0;
-	s.top = strcmp(obs_data_get_string(d, "position"), "top") == 0;
-	s.stacked = strcmp(obs_data_get_string(d, "layout"), "stacked") == 0;
-	s.chips = obs_data_get_bool(d, "chips");
-	s.sample = obs_data_get_bool(d, "sample");
+	s.isLyrics = isLyrics;
+
+	const char *themeStr = obs_data_get_string(d, "theme");
+	s.bgStyle = (themeStr && strlen(themeStr) > 0) ? themeStr : "light";
+
+	s.customBgColor = static_cast<uint32_t>(obs_data_get_int(d, "bg_color"));
+	s.bgOpacity = static_cast<int>(obs_data_get_int(d, "bg_opacity"));
+	if (!obs_data_has_user_value(d, "bg_opacity"))
+		s.bgOpacity = 100;
+
+	const char *imgPath = obs_data_get_string(d, "bg_image");
+	s.bgImagePath = imgPath ? imgPath : "";
+
+	const char *imgFit = obs_data_get_string(d, "bg_image_fit");
+	s.bgImageFit = (imgFit && strlen(imgFit) > 0) ? imgFit : "cover";
+
+	s.cornerRadius = static_cast<int>(obs_data_get_int(d, "corner_radius"));
+	if (!obs_data_has_user_value(d, "corner_radius"))
+		s.cornerRadius = 26;
+
+	s.enableShadow = obs_data_get_bool(d, "enable_shadow");
+	s.shadowOpacity = static_cast<int>(obs_data_get_int(d, "shadow_opacity"));
+	if (!obs_data_has_user_value(d, "shadow_opacity"))
+		s.shadowOpacity = 100;
+
+	const char *ff = obs_data_get_string(d, "font_family");
+	s.fontFamily = (ff && strlen(ff) > 0) ? ff : "Inter";
+
+	const char *fw = obs_data_get_string(d, "font_weight");
+	s.fontWeight = (fw && strlen(fw) > 0) ? fw : "medium";
+
 	s.fontSize = static_cast<int>(obs_data_get_int(d, "font_size"));
+	if (s.fontSize <= 0)
+		s.fontSize = isLyrics ? 44 : 40;
+
 	s.maxLines = static_cast<int>(obs_data_get_int(d, "max_lines"));
+	if (s.maxLines <= 0)
+		s.maxLines = 3;
+
+	const char *al = obs_data_get_string(d, "align");
+	s.textAlign = (al && strlen(al) > 0) ? al : "left";
+
+	s.useCustomColors = obs_data_get_bool(d, "use_custom_colors");
+	s.textColor = static_cast<uint32_t>(obs_data_get_int(d, "text_color"));
+	s.kickerColor = static_cast<uint32_t>(obs_data_get_int(d, "kicker_color"));
+
+	s.showKicker = obs_data_get_bool(d, "show_kicker");
+	s.showSignalDot = obs_data_get_bool(d, "show_dot");
+
+	s.top = strcmp(obs_data_get_string(d, "position"), "top") == 0;
 	s.marginX = static_cast<int>(obs_data_get_int(d, "margin_x"));
 	s.marginY = static_cast<int>(obs_data_get_int(d, "margin_y"));
 	s.fadeMs = static_cast<int>(obs_data_get_int(d, "fade_ms"));
-	s.centerAlign = false;
+	s.sample = obs_data_get_bool(d, "sample");
+}
+
+void readScriptureSettings(LtSettings &s, obs_data_t *d)
+{
+	readCommonSettings(s, d, false);
+	s.stacked = strcmp(obs_data_get_string(d, "layout"), "stacked") == 0;
+	s.chips = obs_data_get_bool(d, "chips");
 	s.showCcli = false;
 }
 
 void readLyricsSettings(LtSettings &s, obs_data_t *d)
 {
-	s.isLyrics = true;
-	s.dark = strcmp(obs_data_get_string(d, "theme"), "dark") == 0;
-	s.top = strcmp(obs_data_get_string(d, "position"), "top") == 0;
+	readCommonSettings(s, d, true);
 	s.stacked = false;
 	s.chips = false;
-	s.sample = obs_data_get_bool(d, "sample");
-	s.fontSize = static_cast<int>(obs_data_get_int(d, "font_size"));
-	s.maxLines = static_cast<int>(obs_data_get_int(d, "max_lines"));
-	s.marginX = static_cast<int>(obs_data_get_int(d, "margin_x"));
-	s.marginY = static_cast<int>(obs_data_get_int(d, "margin_y"));
-	s.fadeMs = static_cast<int>(obs_data_get_int(d, "fade_ms"));
-	s.centerAlign = strcmp(obs_data_get_string(d, "align"), "center") == 0;
 	s.showCcli = obs_data_get_bool(d, "show_ccli");
 }
 
@@ -433,77 +623,165 @@ void lt_destroy(void *data)
 	delete lt;
 }
 
-void lt_defaults(obs_data_t *d)
+void setCommonDefaults(obs_data_t *d, bool isLyrics)
 {
 	obs_data_set_default_string(d, "theme", "light");
-	obs_data_set_default_string(d, "position", "bottom");
-	obs_data_set_default_string(d, "layout", "side");
-	obs_data_set_default_bool(d, "chips", true);
-	obs_data_set_default_bool(d, "sample", false);
-	obs_data_set_default_int(d, "font_size", 40);
+	obs_data_set_default_int(d, "bg_color", 0xFFFFFFFF);
+	obs_data_set_default_int(d, "bg_opacity", 100);
+	obs_data_set_default_string(d, "bg_image", "");
+	obs_data_set_default_string(d, "bg_image_fit", "cover");
+	obs_data_set_default_int(d, "corner_radius", 26);
+	obs_data_set_default_bool(d, "enable_shadow", true);
+	obs_data_set_default_int(d, "shadow_opacity", 100);
+	obs_data_set_default_string(d, "font_family", "Inter");
+	obs_data_set_default_string(d, "font_weight", "medium");
+	obs_data_set_default_int(d, "font_size", isLyrics ? 44 : 40);
 	obs_data_set_default_int(d, "max_lines", 3);
+	obs_data_set_default_string(d, "align", "left");
+	obs_data_set_default_bool(d, "use_custom_colors", false);
+	obs_data_set_default_int(d, "text_color", 0xFF0F1115);
+	obs_data_set_default_int(d, "kicker_color", 0xFF6A707A);
+	obs_data_set_default_bool(d, "show_kicker", true);
+	obs_data_set_default_bool(d, "show_dot", true);
+	obs_data_set_default_string(d, "position", "bottom");
 	obs_data_set_default_int(d, "margin_x", 96);
 	obs_data_set_default_int(d, "margin_y", 64);
 	obs_data_set_default_int(d, "fade_ms", 300);
+	obs_data_set_default_bool(d, "sample", false);
+}
+
+void lt_defaults(obs_data_t *d)
+{
+	setCommonDefaults(d, false);
+	obs_data_set_default_string(d, "layout", "side");
+	obs_data_set_default_bool(d, "chips", true);
 }
 
 void lyrics_lt_defaults(obs_data_t *d)
 {
-	obs_data_set_default_string(d, "theme", "light");
-	obs_data_set_default_string(d, "position", "bottom");
-	obs_data_set_default_string(d, "align", "left");
-	obs_data_set_default_int(d, "font_size", 44);
-	obs_data_set_default_int(d, "max_lines", 3);
-	obs_data_set_default_int(d, "margin_x", 96);
-	obs_data_set_default_int(d, "margin_y", 64);
+	setCommonDefaults(d, true);
 	obs_data_set_default_bool(d, "show_ccli", false);
-	obs_data_set_default_int(d, "fade_ms", 300);
-	obs_data_set_default_bool(d, "sample", false);
+}
+
+bool settings_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
+{
+	const char *theme = obs_data_get_string(settings, "theme");
+	bool isCustom = strcmp(theme, "custom") == 0;
+	bool isImage = strcmp(theme, "image") == 0;
+	bool isTransparent = strcmp(theme, "transparent") == 0;
+	bool hasShadow = obs_data_get_bool(settings, "enable_shadow");
+	bool customColors = obs_data_get_bool(settings, "use_custom_colors");
+	bool showKicker = obs_data_get_bool(settings, "show_kicker");
+
+	obs_property_set_visible(obs_properties_get(props, "bg_color"), isCustom);
+	obs_property_set_visible(obs_properties_get(props, "bg_opacity"), !isTransparent);
+	obs_property_set_visible(obs_properties_get(props, "bg_image"), isImage);
+	obs_property_set_visible(obs_properties_get(props, "bg_image_fit"), isImage);
+	obs_property_set_visible(obs_properties_get(props, "corner_radius"), !isTransparent);
+
+	obs_property_set_visible(obs_properties_get(props, "shadow_opacity"), hasShadow);
+
+	obs_property_set_visible(obs_properties_get(props, "text_color"), customColors);
+	obs_property_set_visible(obs_properties_get(props, "kicker_color"), customColors);
+
+	obs_property_set_visible(obs_properties_get(props, "show_dot"), showKicker);
+
+	return true;
+}
+
+void addCommonProperties(obs_properties_t *props)
+{
+	obs_property_t *p =
+		obs_properties_add_list(props, "theme", "Background Style", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(p, "Light Card (White)", "light");
+	obs_property_list_add_string(p, "Dark Card (Black)", "dark");
+	obs_property_list_add_string(p, "Custom Color Card", "custom");
+	obs_property_list_add_string(p, "Transparent (No Background / Floating Text)", "transparent");
+	obs_property_list_add_string(p, "Custom Background Image", "image");
+	obs_property_set_modified_callback(p, settings_modified);
+
+	obs_properties_add_color(props, "bg_color", "Custom Card Color");
+	obs_properties_add_int(props, "bg_opacity", "Card Opacity (%)", 0, 100, 5);
+
+	obs_properties_add_path(props, "bg_image", "Background Image File", OBS_PATH_FILE,
+				"Image Files (*.png *.jpg *.jpeg *.bmp *.webp *.svg)", nullptr);
+	p = obs_properties_add_list(props, "bg_image_fit", "Image Scaling", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(p, "Cover (Fill entire card)", "cover");
+	obs_property_list_add_string(p, "Fit (Maintain aspect ratio)", "fit");
+	obs_property_list_add_string(p, "Stretch (Fill exactly)", "stretch");
+
+	obs_properties_add_int(props, "corner_radius", "Corner Rounding (px)", 0, 60, 2);
+
+	p = obs_properties_add_bool(props, "enable_shadow", "Drop Shadow");
+	obs_property_set_modified_callback(p, settings_modified);
+	obs_properties_add_int(props, "shadow_opacity", "Shadow Intensity (%)", 0, 100, 5);
+
+	p = obs_properties_add_list(props, "font_family", "Font Family", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(p, "Inter (Modern UI)", "Inter");
+	obs_property_list_add_string(p, "Arial", "Arial");
+	obs_property_list_add_string(p, "Helvetica", "Helvetica");
+	obs_property_list_add_string(p, "Roboto", "Roboto");
+	obs_property_list_add_string(p, "Segoe UI", "Segoe UI");
+	obs_property_list_add_string(p, "Georgia (Serif)", "Georgia");
+	obs_property_list_add_string(p, "Times New Roman (Classic)", "Times New Roman");
+	obs_property_list_add_string(p, "Montserrat", "Montserrat");
+	obs_property_list_add_string(p, "Open Sans", "Open Sans");
+
+	p = obs_properties_add_list(props, "font_weight", "Font Weight", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(p, "Regular (400)", "regular");
+	obs_property_list_add_string(p, "Medium (500)", "medium");
+	obs_property_list_add_string(p, "SemiBold (600)", "semibold");
+	obs_property_list_add_string(p, "Bold (700)", "bold");
+	obs_property_list_add_string(p, "ExtraBold (800)", "extrabold");
+
+	// Numeric font size box with visible numbers (not hidden slider)
+	obs_properties_add_int(props, "font_size", "Text Size (px at 1080p)", 16, 120, 1);
+	obs_properties_add_int(props, "max_lines", "Max Lines Before Shrink", 1, 8, 1);
+
+	p = obs_properties_add_list(props, "align", "Text Alignment", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(p, "Left", "left");
+	obs_property_list_add_string(p, "Center", "center");
+	obs_property_list_add_string(p, "Right", "right");
+
+	p = obs_properties_add_bool(props, "use_custom_colors", "Custom Text & Title Colors");
+	obs_property_set_modified_callback(p, settings_modified);
+	obs_properties_add_color(props, "text_color", "Body Text Color");
+	obs_properties_add_color(props, "kicker_color", "Title / Kicker Color");
+
+	p = obs_properties_add_bool(props, "show_kicker", "Show Title / Reference Bar");
+	obs_property_set_modified_callback(p, settings_modified);
+	obs_properties_add_bool(props, "show_dot", "Show Red Live Dot");
+
+	p = obs_properties_add_list(props, "position", "Screen Position", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(p, "Bottom", "bottom");
+	obs_property_list_add_string(p, "Top", "top");
+
+	obs_properties_add_int(props, "margin_x", "Side Margin (px at 1080p)", 0, 800, 4);
+	obs_properties_add_int(props, "margin_y", "Edge Margin (px at 1080p)", 0, 800, 4);
+	obs_properties_add_int(props, "fade_ms", "Transition Fade (ms)", 0, 2000, 50);
+	obs_properties_add_bool(props, "sample", "Show Sample Card for Positioning");
 }
 
 obs_properties_t *lt_properties(void *)
 {
 	obs_properties_t *props = obs_properties_create();
+	addCommonProperties(props);
+
 	obs_property_t *p =
-		obs_properties_add_list(props, "theme", "Style", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(p, "Light (white card)", "light");
-	obs_property_list_add_string(p, "Dark (black card)", "dark");
-	p = obs_properties_add_list(props, "position", "Position", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(p, "Bottom", "bottom");
-	obs_property_list_add_string(p, "Top", "top");
-	p = obs_properties_add_list(props, "layout", "Two translations", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+		obs_properties_add_list(props, "layout", "Two Translations Layout", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(p, "Side by side", "side");
 	obs_property_list_add_string(p, "Stacked", "stacked");
-	obs_properties_add_int_slider(props, "font_size", "Text size (at 1080p)", 24, 72, 1);
-	obs_properties_add_int_slider(props, "max_lines", "Lines before the text shrinks", 1, 6, 1);
-	obs_properties_add_int(props, "margin_x", "Side margin (px at 1080p)", 0, 600, 4);
-	obs_properties_add_int(props, "margin_y", "Edge margin (px at 1080p)", 0, 600, 4);
-	obs_properties_add_bool(props, "chips", "Show translation labels");
-	obs_properties_add_int_slider(props, "fade_ms", "Fade (ms)", 0, 1500, 50);
-	obs_properties_add_bool(props, "sample", "Show a sample verse while setting up (turn off before service)");
+
+	obs_properties_add_bool(props, "chips", "Show Translation Badges");
 	return props;
 }
 
 obs_properties_t *lyrics_lt_properties(void *)
 {
 	obs_properties_t *props = obs_properties_create();
-	obs_property_t *p =
-		obs_properties_add_list(props, "theme", "Style", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(p, "Light (white card)", "light");
-	obs_property_list_add_string(p, "Dark (black card)", "dark");
-	p = obs_properties_add_list(props, "position", "Position", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(p, "Bottom", "bottom");
-	obs_property_list_add_string(p, "Top", "top");
-	p = obs_properties_add_list(props, "align", "Text alignment", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(p, "Left", "left");
-	obs_property_list_add_string(p, "Center", "center");
-	obs_properties_add_int_slider(props, "font_size", "Text size (at 1080p)", 24, 72, 1);
-	obs_properties_add_int_slider(props, "max_lines", "Lines before the text shrinks", 1, 6, 1);
-	obs_properties_add_int(props, "margin_x", "Side margin (px at 1080p)", 0, 600, 4);
-	obs_properties_add_int(props, "margin_y", "Edge margin (px at 1080p)", 0, 600, 4);
-	obs_properties_add_bool(props, "show_ccli", "Show CCLI number");
-	obs_properties_add_int_slider(props, "fade_ms", "Fade (ms)", 0, 1500, 50);
-	obs_properties_add_bool(props, "sample", "Show a sample lyric while setting up (turn off before service)");
+	addCommonProperties(props);
+
+	obs_properties_add_bool(props, "show_ccli", "Show CCLI Number");
 	return props;
 }
 
@@ -631,8 +909,6 @@ void lt_render(void *data, gs_effect_t *)
 	gs_blend_state_push();
 	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
 	if (lt->prevTex && lt->cross < 1.0f) {
-		// new card fades in over the first half while the old one stays solid, then the old one fades out,
-		// so the card never looks see-through mid-change
 		const float inOp = std::min(1.0f, lt->cross * 2.0f);
 		const float outOp = std::min(1.0f, (1.0f - lt->cross) * 2.0f);
 		drawTex(lt, lt->prevTex, lt->prevPos, lt->alpha * outOp, slide);

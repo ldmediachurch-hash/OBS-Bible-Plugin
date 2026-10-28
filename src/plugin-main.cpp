@@ -21,6 +21,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "lower-third.hpp"
 #include "lyrics.hpp"
 #include "lyrics-dock.hpp"
+#include "worship-word-dock.hpp"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -33,6 +34,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
+static WorshipWordDock *g_worship_word_dock = nullptr;
 static ScriptureDock *g_dock = nullptr;
 static LyricsDock *g_lyrics_dock = nullptr;
 
@@ -56,6 +58,8 @@ static void registerFonts()
 static void frontendEvent(enum obs_frontend_event event, void *)
 {
 	if (event == OBS_FRONTEND_EVENT_EXIT) {
+		if (g_worship_word_dock)
+			g_worship_word_dock->saveConfig();
 		if (g_dock)
 			g_dock->saveConfig();
 		if (g_lyrics_dock)
@@ -79,6 +83,11 @@ bool obs_module_load(void)
 	register_lyrics_lower_third_source();
 
 	auto *main = static_cast<QMainWindow *>(obs_frontend_get_main_window());
+	g_worship_word_dock = new WorshipWordDock(main);
+	if (!obs_frontend_add_dock_by_id("ld_worship_word_dock", obs_module_text("LDScripture.WorshipWordDock"),
+					 g_worship_word_dock))
+		obs_log(LOG_WARNING, "could not add the LD Worship & Word dock");
+
 	g_dock = new ScriptureDock(main);
 	if (!obs_frontend_add_dock_by_id("ld_scripture_dock", obs_module_text("LDScripture.Dock"), g_dock))
 		obs_log(LOG_WARNING, "could not add the LD Scripture dock");
@@ -89,7 +98,7 @@ bool obs_module_load(void)
 
 	obs_frontend_add_event_callback(frontendEvent, nullptr);
 
-	obs_log(LOG_INFO, "LD Scripture loaded (version %s), %d Bibles, %d Songs", PLUGIN_VERSION,
+	obs_log(LOG_INFO, "LD Worship & Word loaded (version %s), %d Bibles, %d Songs", PLUGIN_VERSION,
 		static_cast<int>(BibleLibrary::instance().bibles().size()),
 		static_cast<int>(SongLibrary::instance().songs().size()));
 	return true;
@@ -98,7 +107,8 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	obs_frontend_remove_event_callback(frontendEvent, nullptr);
+	g_worship_word_dock = nullptr;
 	g_dock = nullptr;
 	g_lyrics_dock = nullptr;
-	obs_log(LOG_INFO, "LD Scripture unloaded");
+	obs_log(LOG_INFO, "LD Worship & Word unloaded");
 }

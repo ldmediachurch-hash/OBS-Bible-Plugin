@@ -39,6 +39,7 @@ public slots:
 	void prev();
 	void goLive();
 	void clearLive();
+	bool showQuery(const QString &query, bool fromList = false);
 
 private slots:
 	void runSearch();

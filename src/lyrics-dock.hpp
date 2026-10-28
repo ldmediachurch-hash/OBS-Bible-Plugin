@@ -41,6 +41,7 @@ public slots:
 	void goLive();
 	void clearLive();
 	void toggleBlank();
+	bool openSong(const QString &titleOrPath, bool fromList = false);
 
 private slots:
 	void runSearch();
