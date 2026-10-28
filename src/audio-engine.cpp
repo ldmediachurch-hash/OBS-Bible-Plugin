@@ -13,6 +13,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include "lyrics.hpp"
 
 #include <obs-module.h>
+#include <plugin-support.h>
 #include <whisper.h>
 
 #include <QDateTime>
