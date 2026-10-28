@@ -576,6 +576,7 @@ bool ScriptureDock::openListIndex(int index, bool fromEnd)
 	if (index < 0 || index >= serviceList->count())
 		return false;
 	listIndex = index;
+	serviceList->clearSelection();
 	serviceList->setCurrentRow(index);
 	searchEdit->setText(serviceList->item(index)->text());
 	return showQuery(serviceList->item(index)->text(), true);
