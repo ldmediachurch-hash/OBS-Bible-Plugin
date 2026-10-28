@@ -6,6 +6,7 @@ project(${_name} VERSION ${_version})
 
 option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
 option(ENABLE_QT "Use Qt functionality" ON)
+option(BUILD_TESTS "Build test suite" OFF)
 
 include(compilerconfig)
 include(defaults)
@@ -45,7 +46,22 @@ target_sources(
     src/dock.hpp
     src/lower-third.cpp
     src/lower-third.hpp
+    src/lyrics.cpp
+    src/lyrics.hpp
+    src/lyrics-dock.cpp
+    src/lyrics-dock.hpp
 )
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
+
+if(BUILD_TESTS)
+  enable_testing()
+  add_executable(lyrics-tests tests/lyrics-tests.cpp src/lyrics.cpp src/lyrics.hpp)
+  target_link_libraries(lyrics-tests PRIVATE Qt6::Core)
+  set_target_properties(
+    lyrics-tests
+    PROPERTIES AUTOMOC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+  )
+  add_test(NAME lyrics-tests COMMAND lyrics-tests)
+endif()

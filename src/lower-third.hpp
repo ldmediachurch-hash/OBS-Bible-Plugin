@@ -11,3 +11,4 @@ the Free Software Foundation; either version 2 of the License, or
 #pragma once
 
 void register_lower_third_source();
+void register_lyrics_lower_third_source();

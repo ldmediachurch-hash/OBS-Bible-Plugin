@@ -217,6 +217,10 @@ jobs:
           target: x86_64
           config: ${{ needs.check-event.outputs.config }}
 
+      - name: Run Tests 🧪
+        run: |
+          ./build_x86_64/lyrics-tests
+
       - name: Package Plugin 📀
         uses: ./.github/actions/package-plugin
         with:
