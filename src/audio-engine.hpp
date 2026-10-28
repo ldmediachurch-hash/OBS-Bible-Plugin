@@ -25,6 +25,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include <string>
 #include <vector>
 
+struct whisper_context;
 class AudioMeterWidget;
 
 class AudioEngine : public QObject {
@@ -43,6 +44,11 @@ public:
 	bool isListening() const;
 	float currentLevel() const; // 0.0f to 1.0f (thread-safe normalized dB)
 
+	// Speech Model status
+	bool isModelLoaded() const;
+	QString modelStatusText() const;
+	void loadModel();
+
 	// Set active channel mode for suggestion prioritization (Scripture vs Lyrics)
 	void setChannelMode(Channel ch);
 	Channel channelMode() const;
@@ -54,6 +60,7 @@ signals:
 	void levelChanged(float level);
 	void suggestionDetected(Channel channel, const QString &reference, const QString &text, int confidence);
 	void statusChanged(bool listening, const QString &sourceName);
+	void modelLoadedChanged(bool loaded, const QString &statusText);
 
 private:
 	AudioEngine();
@@ -63,18 +70,25 @@ private:
 	void stopWorker();
 	void workerLoop();
 
-	// Pattern matchers
+	// Speech inference & Pattern matchers
 	void analyzeBuffer(const std::vector<float> &chunk);
+	QString transcribeChunk(const std::vector<float> &chunk);
 	void detectScripture(const QString &transcript);
 	void detectLyrics(const QString &transcript);
 
 	std::atomic<bool> m_listening{false};
 	std::atomic<float> m_level{0.0f};
 	std::atomic<Channel> m_channel{Channel::Scripture};
+	std::atomic<bool> m_modelLoaded{false};
 
 	mutable std::mutex m_sourceMutex;
 	QString m_currentSourceName;
 	obs_source_t *m_currentSource = nullptr;
+
+	// Whisper speech model
+	whisper_context *m_whisperCtx = nullptr;
+	std::mutex m_whisperMutex;
+	QString m_modelStatusText{QStringLiteral("Model not loaded")};
 
 	// Ring buffer (pre-allocated 5 seconds @ 16kHz)
 	static constexpr size_t kBufferSize = 80000;

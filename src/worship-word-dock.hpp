@@ -65,6 +65,7 @@ private:
 	QComboBox *m_audioCombo = nullptr;
 	AudioMeterWidget *m_meter = nullptr;
 	QToolButton *m_refreshAudioBtn = nullptr;
+	QToolButton *m_modelStatusBtn = nullptr;
 
 	// Suggestion Pill
 	QWidget *m_suggestionPill = nullptr;
@@ -77,3 +78,4 @@ private:
 	QString m_suggestedRef;
 	QString m_suggestedText;
 };
+

@@ -12,8 +12,14 @@ the Free Software Foundation; either version 2 of the License, or
 #include "bible.hpp"
 #include "lyrics.hpp"
 
+#include <obs-module.h>
+#include <whisper.h>
+
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QPainter>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QTimer>
 
@@ -55,6 +61,71 @@ static bool enum_audio_sources(void *param, obs_source_t *source)
 	return true;
 }
 
+QString findExistingModelPath()
+{
+	char *bundled = obs_module_file("models/ggml-tiny.en.bin");
+	if (bundled) {
+		QString s = QString::fromUtf8(bundled);
+		bfree(bundled);
+		if (QFile::exists(s))
+			return s;
+	}
+	char *cfg = obs_module_config_path("models/ggml-tiny.en.bin");
+	if (cfg) {
+		QString s = QString::fromUtf8(cfg);
+		bfree(cfg);
+		if (QFile::exists(s))
+			return s;
+	}
+	return QString();
+}
+
+QString defaultModelDestPath()
+{
+	char *cfg = obs_module_config_path("models/ggml-tiny.en.bin");
+	QString s = cfg ? QString::fromUtf8(cfg) : QString();
+	bfree(cfg);
+	return s;
+}
+
+QString normalizeSpokenText(QString s)
+{
+	s = s.toLower();
+	s.replace(QRegularExpression(QStringLiteral("[,.:;?!\\-\\(\\)—]")), QStringLiteral(" "));
+
+	// Ordinals
+	s.replace(QRegularExpression(QStringLiteral("\\bfirst\\b")), QStringLiteral("1"));
+	s.replace(QRegularExpression(QStringLiteral("\\bsecond\\b")), QStringLiteral("2"));
+	s.replace(QRegularExpression(QStringLiteral("\\bthird\\b")), QStringLiteral("3"));
+	s.replace(QRegularExpression(QStringLiteral("\\bfourth\\b")), QStringLiteral("4"));
+	s.replace(QRegularExpression(QStringLiteral("\\bfifth\\b")), QStringLiteral("5"));
+	s.replace(QRegularExpression(QStringLiteral("\\b1st\\b")), QStringLiteral("1"));
+	s.replace(QRegularExpression(QStringLiteral("\\b2nd\\b")), QStringLiteral("2"));
+	s.replace(QRegularExpression(QStringLiteral("\\b3rd\\b")), QStringLiteral("3"));
+
+	// Numbers
+	static const struct {
+		const char *word;
+		int val;
+	} kNumWords[] = {{"one", 1},        {"two", 2},       {"three", 3},     {"four", 4},      {"five", 5},
+			 {"six", 6},        {"seven", 7},     {"eight", 8},     {"nine", 9},      {"ten", 10},
+			 {"eleven", 11},    {"twelve", 12},   {"thirteen", 13}, {"fourteen", 14}, {"fifteen", 15},
+			 {"sixteen", 16},   {"seventeen", 17}, {"eighteen", 18}, {"nineteen", 19}, {"twenty", 20},
+			 {"thirty", 30},    {"forty", 40},    {"fifty", 50},    {"sixty", 60},    {"seventy", 70},
+			 {"eighty", 80},    {"ninety", 90},   {"hundred", 100}};
+	for (const auto &nw : kNumWords) {
+		s.replace(QRegularExpression(QStringLiteral("\\b%1\\b").arg(nw.word)), QString::number(nw.val));
+	}
+
+	// Composite numbers e.g. "20 8" -> "28"
+	s.replace(QRegularExpression(QStringLiteral("\\b(\\d0) (\\d)\\b")),
+		  [](const QRegularExpressionMatch &m) {
+			  return QString::number(m.captured(1).toInt() + m.captured(2).toInt());
+		  });
+
+	return s.simplified();
+}
+
 } // namespace
 
 AudioEngine &AudioEngine::instance()
@@ -67,12 +138,19 @@ AudioEngine::AudioEngine()
 	: m_ringBuffer(kBufferSize, 0.0f)
 {
 	startWorker();
+	loadModel();
 }
 
 AudioEngine::~AudioEngine()
 {
 	setAudioSource(QString());
 	stopWorker();
+
+	std::lock_guard<std::mutex> lock(m_whisperMutex);
+	if (m_whisperCtx) {
+		whisper_free(m_whisperCtx);
+		m_whisperCtx = nullptr;
+	}
 }
 
 QList<QString> AudioEngine::availableAudioSources()
@@ -123,6 +201,68 @@ bool AudioEngine::isListening() const
 float AudioEngine::currentLevel() const
 {
 	return m_level.load(std::memory_order_relaxed);
+}
+
+bool AudioEngine::isModelLoaded() const
+{
+	return m_modelLoaded.load(std::memory_order_relaxed);
+}
+
+QString AudioEngine::modelStatusText() const
+{
+	return m_modelStatusText;
+}
+
+void AudioEngine::loadModel()
+{
+	QString path = findExistingModelPath();
+	if (path.isEmpty()) {
+		m_modelStatusText = QStringLiteral("Model not found on disk");
+		m_modelLoaded.store(false, std::memory_order_relaxed);
+		emit modelLoadedChanged(false, m_modelStatusText);
+
+		// Trigger background download to user config directory
+		QString dest = defaultModelDestPath();
+		if (!dest.isEmpty()) {
+			QFileInfo fi(dest);
+			QDir().mkpath(fi.dir().absolutePath());
+
+			// Download via curl in background
+			std::thread([this, dest]() {
+				QStringList args;
+				args << QStringLiteral("-L") << QStringLiteral("-s") << QStringLiteral("-o") << dest
+				     << QStringLiteral(
+					    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin");
+				int code = QProcess::execute(QStringLiteral("curl"), args);
+				if (code == 0 && QFile::exists(dest)) {
+					loadModel();
+				}
+			}).detach();
+		}
+		return;
+	}
+
+	std::lock_guard<std::mutex> lock(m_whisperMutex);
+	if (m_whisperCtx) {
+		whisper_free(m_whisperCtx);
+		m_whisperCtx = nullptr;
+	}
+
+	whisper_context_params cparams = whisper_context_default_params();
+	m_whisperCtx = whisper_init_from_file_with_params(path.toUtf8().constData(), cparams);
+
+	if (m_whisperCtx) {
+		m_modelLoaded.store(true, std::memory_order_relaxed);
+		m_modelStatusText = QStringLiteral("Speech Model Active (Offline)");
+		obs_log(LOG_INFO, "[LD Audio] Whisper speech model loaded from %s", path.toUtf8().constData());
+		emit modelLoadedChanged(true, m_modelStatusText);
+	} else {
+		m_modelLoaded.store(false, std::memory_order_relaxed);
+		m_modelStatusText = QStringLiteral("Failed to load Whisper context");
+		obs_log(LOG_WARNING, "[LD Audio] Could not initialize Whisper model from %s",
+			path.toUtf8().constData());
+		emit modelLoadedChanged(false, m_modelStatusText);
+	}
 }
 
 void AudioEngine::setChannelMode(Channel ch)
@@ -181,10 +321,11 @@ void AudioEngine::stopWorker()
 
 void AudioEngine::workerLoop()
 {
-	std::vector<float> chunk(8000, 0.0f); // 500ms chunk @ 16kHz
+	// 2.5 seconds of audio @ 16kHz = 40,000 samples
+	std::vector<float> chunk(40000, 0.0f);
 
 	while (m_workerRunning.load(std::memory_order_relaxed)) {
-		std::this_thread::sleep_for(std::chrono::milliseconds(400));
+		std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
 		if (!m_listening.load(std::memory_order_relaxed))
 			continue;
@@ -208,50 +349,243 @@ void AudioEngine::workerLoop()
 
 void AudioEngine::analyzeBuffer(const std::vector<float> &chunk)
 {
-	// Voice energy detector
+	// Voice activity detection: check if energy > noise gate (-38 dB)
 	float sum = 0.0f;
 	for (float s : chunk)
 		sum += s * s;
 	float rms = sqrtf(sum / static_cast<float>(chunk.size()));
 
-	// If speech energy is present (> -36 dB)
-	if (rms > 0.015f) {
-		Channel ch = m_channel.load(std::memory_order_relaxed);
-		if (ch == Channel::Scripture) {
-			detectScripture(QString());
-		} else {
-			detectLyrics(QString());
+	if (rms < 0.012f)
+		return;
+
+	QString transcript = transcribeChunk(chunk);
+	if (transcript.isEmpty())
+		return;
+
+	Channel ch = m_channel.load(std::memory_order_relaxed);
+	if (ch == Channel::Scripture) {
+		detectScripture(transcript);
+	} else {
+		detectLyrics(transcript);
+	}
+}
+
+QString AudioEngine::transcribeChunk(const std::vector<float> &chunk)
+{
+	std::lock_guard<std::mutex> lock(m_whisperMutex);
+	if (!m_whisperCtx)
+		return QString();
+
+	whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+	wparams.print_progress = false;
+	wparams.print_special = false;
+	wparams.print_realtime = false;
+	wparams.print_timestamps = false;
+	wparams.language = "en";
+	wparams.n_threads = 4;
+	wparams.translate = false;
+	wparams.no_context = true;
+	wparams.single_segment = false;
+
+	if (whisper_full(m_whisperCtx, wparams, chunk.data(), static_cast<int>(chunk.size())) != 0) {
+		return QString();
+	}
+
+	QString result;
+	int n_segments = whisper_full_n_segments(m_whisperCtx);
+	for (int i = 0; i < n_segments; i++) {
+		const char *text = whisper_full_get_segment_text(m_whisperCtx, i);
+		if (text)
+			result += QString::fromUtf8(text) + QStringLiteral(" ");
+	}
+	return result.trimmed();
+}
+
+void AudioEngine::detectScripture(const QString &rawTranscript)
+{
+	uint64_t now = QDateTime::currentMSecsSinceEpoch();
+	if (now - m_lastSuggestionTime < 4500)
+		return;
+
+	QString text = normalizeSpokenText(rawTranscript);
+	if (text.isEmpty())
+		return;
+
+	// Canonical book names catalog
+	static const struct {
+		const char *name;
+		const char *canonical;
+	} kBooks[] = {
+		{"genesis", "Genesis"},
+		{"exodus", "Exodus"},
+		{"leviticus", "Leviticus"},
+		{"numbers", "Numbers"},
+		{"deuteronomy", "Deuteronomy"},
+		{"joshua", "Joshua"},
+		{"judges", "Judges"},
+		{"ruth", "Ruth"},
+		{"1 samuel", "1 Samuel"},
+		{"2 samuel", "2 Samuel"},
+		{"1 kings", "1 Kings"},
+		{"2 kings", "2 Kings"},
+		{"1 chronicles", "1 Chronicles"},
+		{"2 chronicles", "2 Chronicles"},
+		{"ezra", "Ezra"},
+		{"nehemiah", "Nehemiah"},
+		{"esther", "Esther"},
+		{"job", "Job"},
+		{"psalms", "Psalms"},
+		{"psalm", "Psalms"},
+		{"proverbs", "Proverbs"},
+		{"ecclesiastes", "Ecclesiastes"},
+		{"song of solomon", "Song of Solomon"},
+		{"isaiah", "Isaiah"},
+		{"jeremiah", "Jeremiah"},
+		{"lamentations", "Lamentations"},
+		{"ezekiel", "Ezekiel"},
+		{"daniel", "Daniel"},
+		{"hosea", "Hosea"},
+		{"joel", "Joel"},
+		{"amos", "Amos"},
+		{"obadiah", "Obadiah"},
+		{"jonah", "Jonah"},
+		{"micah", "Micah"},
+		{"nahum", "Nahum"},
+		{"habakkuk", "Habakkuk"},
+		{"zephaniah", "Zephaniah"},
+		{"haggai", "Haggai"},
+		{"zechariah", "Zechariah"},
+		{"malachi", "Malachi"},
+		{"matthew", "Matthew"},
+		{"mark", "Mark"},
+		{"luke", "Luke"},
+		{"john", "John"},
+		{"acts", "Acts"},
+		{"romans", "Romans"},
+		{"1 corinthians", "1 Corinthians"},
+		{"2 corinthians", "2 Corinthians"},
+		{"galatians", "Galatians"},
+		{"ephesians", "Ephesians"},
+		{"philippians", "Philippians"},
+		{"colossians", "Colossians"},
+		{"1 thessalonians", "1 Thessalonians"},
+		{"2 thessalonians", "2 Thessalonians"},
+		{"1 timothy", "1 Timothy"},
+		{"2 timothy", "2 Timothy"},
+		{"titus", "Titus"},
+		{"philemon", "Philemon"},
+		{"hebrews", "Hebrews"},
+		{"james", "James"},
+		{"1 peter", "1 Peter"},
+		{"2 peter", "2 Peter"},
+		{"1 john", "1 John"},
+		{"2 john", "2 John"},
+		{"3 john", "3 John"},
+		{"jude", "Jude"},
+		{"revelation", "Revelation"},
+	};
+
+	for (const auto &b : kBooks) {
+		QRegularExpression rx(QStringLiteral("\\b%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?(?:\\s*(?:verse|v|from)?"
+						     "\\s*(\\d+))?")
+					      .arg(b.name));
+		QRegularExpressionMatch m = rx.match(text);
+		if (m.hasMatch()) {
+			int ch = m.captured(1).toInt();
+			int vs = m.captured(2).toInt();
+			if (ch > 0) {
+				QString ref;
+				if (vs > 0) {
+					ref = QStringLiteral("%1 %2:%3").arg(b.canonical).arg(ch).arg(vs);
+				} else {
+					ref = QStringLiteral("%1 %2").arg(b.canonical).arg(ch);
+				}
+
+				if (ref != m_lastSuggestedRef) {
+					m_lastSuggestedRef = ref;
+					m_lastSuggestionTime = now;
+					emit suggestionDetected(Channel::Scripture, ref,
+								QStringLiteral("Detected from audio"), 95);
+					return;
+				}
+			}
+		}
+	}
+
+	// Reverse quote lookup: check common preaching phrases
+	static const struct {
+		const char *phrase;
+		const char *ref;
+		const char *verse;
+	} kQuotes[] = {
+		{"for god so loved the world", "John 3:16",
+		 "For God so loved the world, that he gave his only begotten Son..."},
+		{"the lord is my shepherd", "Psalm 23:1", "The Lord is my shepherd; I shall not want."},
+		{"all things work together for good", "Romans 8:28",
+		 "And we know that all things work together for good to them that love God..."},
+		{"i can do all things through christ", "Philippians 4:13",
+		 "I can do all things through Christ which strengtheneth me."},
+		{"trust in the lord with all thine heart", "Proverbs 3:5",
+		 "Trust in the Lord with all thine heart; and lean not unto thine own understanding."},
+		{"in the beginning god created", "Genesis 1:1",
+		 "In the beginning God created the heaven and the earth."},
+	};
+
+	for (const auto &q : kQuotes) {
+		if (text.contains(QString::fromUtf8(q.phrase))) {
+			QString ref = QString::fromUtf8(q.ref);
+			if (ref != m_lastSuggestedRef) {
+				m_lastSuggestedRef = ref;
+				m_lastSuggestionTime = now;
+				emit suggestionDetected(Channel::Scripture, ref, QString::fromUtf8(q.verse), 92);
+				return;
+			}
 		}
 	}
 }
 
-void AudioEngine::detectScripture(const QString &)
-{
-	// Contextual Scripture Suggestion Engine:
-	// Rate-limited to at most once per 6 seconds to prevent screen spam
-	uint64_t now = QDateTime::currentMSecsSinceEpoch();
-	if (now - m_lastSuggestionTime < 6000)
-		return;
-
-	// In live sermon mode, we monitor active service scripture ranges and keyword mentions
-	const auto &bibles = BibleLibrary::instance().bibles();
-	if (bibles.empty())
-		return;
-
-	// The listener engine checks candidate references from preaching patterns
-	// When candidate exceeds confidence threshold, emit suggestion
-}
-
-void AudioEngine::detectLyrics(const QString &)
+void AudioEngine::detectLyrics(const QString &rawTranscript)
 {
 	uint64_t now = QDateTime::currentMSecsSinceEpoch();
-	if (now - m_lastSuggestionTime < 5000)
+	if (now - m_lastSuggestionTime < 4500)
 		return;
 
-	// In worship mode, we monitor candidate songs from loaded library
+	QString text = normalizeSpokenText(rawTranscript);
+	if (text.length() < 8)
+		return;
+
 	const auto &songs = SongLibrary::instance().songs();
-	if (songs.empty())
-		return;
+	for (const auto &song : songs) {
+		QString normTitle = normalizeSpokenText(song.title);
+		if (!normTitle.isEmpty() && text.contains(normTitle)) {
+			QString ref = song.title.toUpper();
+			if (ref != m_lastSuggestedRef) {
+				m_lastSuggestedRef = ref;
+				m_lastSuggestionTime = now;
+				emit suggestionDetected(Channel::Lyrics, ref, song.title, 94);
+				return;
+			}
+		}
+
+		for (const auto &sec : song.sections) {
+			for (const auto &slide : sec.slides) {
+				for (const auto &line : slide.lines) {
+					QString normLine = normalizeSpokenText(line);
+					if (normLine.length() >= 12 && text.contains(normLine)) {
+						QString ref = QStringLiteral("%1 · %2")
+								      .arg(song.title.toUpper())
+								      .arg(sec.name.toUpper());
+						if (ref != m_lastSuggestedRef) {
+							m_lastSuggestedRef = ref;
+							m_lastSuggestionTime = now;
+							emit suggestionDetected(Channel::Lyrics, ref, line, 90);
+							return;
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 // AudioMeterWidget Implementation
@@ -269,7 +603,6 @@ AudioMeterWidget::AudioMeterWidget(QWidget *parent)
 void AudioMeterWidget::tick()
 {
 	float target = AudioEngine::instance().currentLevel();
-	// Smooth decay
 	if (target >= m_displayLevel) {
 		m_displayLevel = target;
 	} else {
@@ -315,7 +648,6 @@ void AudioMeterWidget::paintEvent(QPaintEvent *)
 		if (i < activeBars) {
 			p.setBrush(col);
 		} else {
-			// Subdued inactive bar
 			col.setAlpha(45);
 			p.setBrush(col);
 		}

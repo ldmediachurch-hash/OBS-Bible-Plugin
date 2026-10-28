@@ -90,6 +90,22 @@ WorshipWordDock::WorshipWordDock(QWidget *parent)
 	m_meter = new AudioMeterWidget(m_audioBar);
 	audioLayout->addWidget(m_meter);
 
+	m_modelStatusBtn = new QToolButton(m_audioBar);
+	m_modelStatusBtn->setText(AudioEngine::instance().isModelLoaded() ? QStringLiteral("🟢 AI") : QStringLiteral("📥 Model"));
+	m_modelStatusBtn->setToolTip(AudioEngine::instance().modelStatusText());
+	connect(m_modelStatusBtn, &QToolButton::clicked, this, [this]() {
+		if (!AudioEngine::instance().isModelLoaded()) {
+			m_modelStatusBtn->setText(QStringLiteral("⏳ Loading..."));
+			AudioEngine::instance().loadModel();
+		}
+	});
+	connect(&AudioEngine::instance(), &AudioEngine::modelLoadedChanged, this,
+		[this](bool loaded, const QString &text) {
+			m_modelStatusBtn->setText(loaded ? QStringLiteral("🟢 AI") : QStringLiteral("📥 Model"));
+			m_modelStatusBtn->setToolTip(text);
+		});
+	audioLayout->addWidget(m_modelStatusBtn);
+
 	m_refreshAudioBtn = new QToolButton(m_audioBar);
 	m_refreshAudioBtn->setText(QStringLiteral("🔄"));
 	m_refreshAudioBtn->setToolTip(QStringLiteral("Refresh Audio Devices"));
@@ -294,3 +310,4 @@ void WorshipWordDock::loadConfig()
 			m_audioCombo->setCurrentIndex(idx);
 	}
 }
+

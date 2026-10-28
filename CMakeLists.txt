@@ -35,6 +35,53 @@ if(ENABLE_QT)
   )
 endif()
 
+include(FetchContent)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+if(APPLE)
+  set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+endif()
+
+FetchContent_Declare(
+  whisper
+  GIT_REPOSITORY https://github.com/ggerganov/whisper.cpp.git
+  GIT_TAG v1.7.4
+  GIT_SHALLOW TRUE
+  SYSTEM
+)
+FetchContent_MakeAvailable(whisper)
+
+if(TARGET whisper)
+  set_target_properties(whisper PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE whisper)
+endif()
+if(TARGET ggml)
+  set_target_properties(ggml PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+endif()
+if(TARGET ggml-base)
+  set_target_properties(ggml-base PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+endif()
+if(TARGET ggml-cpu)
+  set_target_properties(ggml-cpu PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+endif()
+
+set(MODEL_URL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin")
+set(MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/data/models")
+set(MODEL_FILE "${MODEL_DIR}/ggml-tiny.en.bin")
+file(MAKE_DIRECTORY "${MODEL_DIR}")
+if(NOT EXISTS "${MODEL_FILE}")
+  message(STATUS "Downloading whisper model ggml-tiny.en.bin for installer packaging...")
+  file(DOWNLOAD "${MODEL_URL}" "${MODEL_FILE}" SHOW_PROGRESS STATUS DL_STATUS TIMEOUT 60)
+  list(GET DL_STATUS 0 DL_ERR)
+  if(NOT DL_ERR EQUAL 0)
+    message(WARNING "Could not pre-download model during CMake (${DL_STATUS}). Model will be downloaded on first run.")
+    file(REMOVE "${MODEL_FILE}")
+  endif()
+endif()
+
 target_sources(
   ${CMAKE_PROJECT_NAME}
   PRIVATE
