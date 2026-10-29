@@ -111,25 +111,13 @@ jobs:
           tag="${{ steps.check.outputs.version }}"
           title="${{ needs.build-project.outputs.pluginName }} ${{ steps.check.outputs.version }}"
           
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            echo "Release ${tag} exists, uploading assets with --clobber..."
-            gh release upload "${tag}" \
-              ${{ github.workspace }}/*.zip \
-              ${{ github.workspace }}/*.pkg \
-              ${{ github.workspace }}/*.deb \
-              ${{ github.workspace }}/*.ddeb \
-              ${{ github.workspace }}/*.tar.xz \
-              --clobber
-            gh release edit "${tag}" --title "${title}" --notes-file "${{ github.workspace }}/CHECKSUMS.txt"
-          else
-            echo "Creating release ${tag}..."
-            gh release create "${tag}" \
-              ${{ github.workspace }}/*.zip \
-              ${{ github.workspace }}/*.pkg \
-              ${{ github.workspace }}/*.deb \
-              ${{ github.workspace }}/*.ddeb \
-              ${{ github.workspace }}/*.tar.xz \
-              --title "${title}" \
-              --notes-file "${{ github.workspace }}/CHECKSUMS.txt" \
-              --clobber
-          fi
+          gh release delete "${tag}" --yes || true
+          
+          gh release create "${tag}" \
+            ${{ github.workspace }}/*.zip \
+            ${{ github.workspace }}/*.pkg \
+            ${{ github.workspace }}/*.deb \
+            ${{ github.workspace }}/*.ddeb \
+            ${{ github.workspace }}/*.tar.xz \
+            --title "${title}" \
+            --notes-file "${{ github.workspace }}/CHECKSUMS.txt"
