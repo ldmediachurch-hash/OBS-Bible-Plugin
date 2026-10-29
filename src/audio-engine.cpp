@@ -526,7 +526,7 @@ bool AudioEngine::detectScripture(const QString &rawTranscript)
 	for (const auto &b : kAliases) {
 		// Pattern 1: Standard [Book] [Chapter] [Verse] with connectors
 		QRegularExpression rx(QStringLiteral(
-			"\\b%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?(?:\\s*(?:[:,\-]|and\\s+(?:verse|v)?|from\\s+(?:verse|v)?|starting\\s+(?:at\\s+)?(?:verse|v)?|at\\s+(?:verse|v)?|verse|verses|v)?\\s*(\\d+))?"
+			"\\b%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?(?:\\s*(?:[:,-]|and\\s+(?:verse|v)?|from\\s+(?:verse|v)?|starting\\s+(?:at\\s+)?(?:verse|v)?|at\\s+(?:verse|v)?|verse|verses|v)?\\s*(\\d+))?"
 		).arg(QRegularExpression::escape(QString::fromUtf8(b.alias))));
 
 		QRegularExpressionMatch m = rx.match(text);

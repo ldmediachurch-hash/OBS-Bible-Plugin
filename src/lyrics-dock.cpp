@@ -42,7 +42,7 @@ the Free Software Foundation; either version 2 of the License, or
 
 namespace {
 
-enum Roles { RoleSlideIndex = Qt::UserRole + 1, RoleSongPath, RoleSectionCode };
+enum Roles { RoleSlideIndex = Qt::UserRole + 1, RoleSongPath, RoleSectionCode, RoleSectionName };
 
 QString configPath()
 {
@@ -457,6 +457,7 @@ void LyricsDock::rebuildSlides()
 		auto *item = new QListWidgetItem(sl.listLabel(), slideList);
 		item->setData(RoleSlideIndex, static_cast<int>(i));
 		item->setData(RoleSectionCode, sl.sectionCode);
+		item->setData(RoleSectionName, sl.sectionName);
 		item->setToolTip(sl.text());
 	}
 
