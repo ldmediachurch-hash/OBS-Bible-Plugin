@@ -198,8 +198,10 @@ public:
 		titleFont.setBold(isSelected);
 		p->setFont(titleFont);
 		p->setPen(isSelected ? Qt::white : QColor(220, 224, 230));
+		QFontMetrics fmTitle(titleFont);
+		QString elidedTitle = fmTitle.elidedText(title, Qt::ElideRight, r.width() - 38);
 		QRect titleRect(r.left() + 32, r.top(), r.width() - 38, r.height());
-		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
+		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, elidedTitle);
 
 		p->restore();
 	}
@@ -240,24 +242,14 @@ void ScriptureDock::setupLayout()
 	root->setContentsMargins(6, 6, 6, 6);
 	root->setSpacing(6);
 
-	// 1. Search + Translations + Gear Row
+	// 1. Search + Gear Row
 	auto *searchRow = new QHBoxLayout();
 	searchRow->setSpacing(6);
 
 	searchEdit = new QLineEdit(this);
 	searchEdit->setPlaceholderText(QStringLiteral("Rom 8:28, Psalm 23, or words"));
 	searchEdit->setClearButtonEnabled(true);
-	searchRow->addWidget(searchEdit, 2);
-
-	primaryBox = new QComboBox(this);
-	primaryBox->setToolTip(QStringLiteral("Primary Translation"));
-	primaryBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-	searchRow->addWidget(primaryBox, 1);
-
-	secondaryBox = new QComboBox(this);
-	secondaryBox->setToolTip(QStringLiteral("Secondary Translation (Optional)"));
-	secondaryBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-	searchRow->addWidget(secondaryBox, 1);
+	searchRow->addWidget(searchEdit, 1);
 
 	gearBtn = new QToolButton(this);
 	gearBtn->setIcon(QIcon(QStringLiteral(":/icons/gear.svg")));
@@ -268,93 +260,112 @@ void ScriptureDock::setupLayout()
 
 	root->addLayout(searchRow);
 
-	// 2. Responsive 2-column or 1-column container
-	m_topLayout = new QHBoxLayout();
-	m_topLayout->setSpacing(8);
+	// Translations Row (Primary + Secondary)
+	auto *transRow = new QHBoxLayout();
+	transRow->setSpacing(6);
 
-	m_leftColumn = new QWidget(this);
-	m_leftLayout = new QVBoxLayout(m_leftColumn);
-	m_leftLayout->setContentsMargins(0, 0, 0, 0);
-	m_leftLayout->setSpacing(6);
+	primaryBox = new QComboBox(this);
+	primaryBox->setToolTip(QStringLiteral("Primary Translation"));
+	primaryBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+	transRow->addWidget(primaryBox, 1);
 
-	m_rightColumn = new QWidget(this);
-	m_rightLayout = new QVBoxLayout(m_rightColumn);
-	m_rightLayout->setContentsMargins(0, 0, 0, 0);
-	m_rightLayout->setSpacing(6);
+	secondaryBox = new QComboBox(this);
+	secondaryBox->setToolTip(QStringLiteral("Secondary Translation (Optional)"));
+	secondaryBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+	transRow->addWidget(secondaryBox, 1);
+
+	root->addLayout(transRow);
+
+	// 2. Vertical scroll area for all content
+	scrollArea = new QScrollArea(this);
+	scrollArea->setWidgetResizable(true);
+	scrollArea->setFrameShape(QFrame::NoFrame);
+	scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+	scrollContent = new QWidget(scrollArea);
+	contentLayout = new QVBoxLayout(scrollContent);
+	contentLayout->setContentsMargins(0, 0, 0, 0);
+	contentLayout->setSpacing(8);
 
 	QFont hFont = font();
 	hFont.setPointSize(8);
 	hFont.setBold(true);
 	hFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
 
-	// --- Left Column: Service List ---
+	// --- Verses Section ---
+	auto *versesHeaderRow = new QHBoxLayout();
+	versesHeaderLabel = new QLabel(QStringLiteral("VERSES"), scrollContent);
+	versesHeaderLabel->setFont(hFont);
+	versesHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
+	versesHeaderRow->addWidget(versesHeaderLabel, 1);
+	contentLayout->addLayout(versesHeaderRow);
+
+	results = new QListWidget(scrollContent);
+	results->setItemDelegate(new VerseCardDelegate(results));
+	results->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	results->setMinimumHeight(150);
+	contentLayout->addWidget(results);
+
+	// 16:9 Mini Program Thumbnail
+	thumbnail = new MiniProgramThumbnail(scrollContent);
+	contentLayout->addWidget(thumbnail);
+
+	// --- Service List Section ---
 	auto *serviceHeaderRow = new QHBoxLayout();
-	serviceHeaderLabel = new QLabel(QStringLiteral("SERVICE LIST · 0"), m_leftColumn);
+	serviceHeaderLabel = new QLabel(QStringLiteral("SERVICE LIST · 0"), scrollContent);
 	serviceHeaderLabel->setFont(hFont);
 	serviceHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
 	serviceHeaderRow->addWidget(serviceHeaderLabel, 1);
 
-	serviceAddBtn = new QToolButton(m_leftColumn);
+	serviceAddBtn = new QToolButton(scrollContent);
 	serviceAddBtn->setIcon(QIcon(QStringLiteral(":/icons/plus.svg")));
 	serviceAddBtn->setToolTip(QStringLiteral("Add current scripture to service list"));
 	connect(serviceAddBtn, &QToolButton::clicked, this, &ScriptureDock::addToList);
 	serviceHeaderRow->addWidget(serviceAddBtn);
 
-	serviceRemBtn = new QToolButton(m_leftColumn);
+	serviceRemBtn = new QToolButton(scrollContent);
 	serviceRemBtn->setIcon(QIcon(QStringLiteral(":/icons/minus.svg")));
 	serviceRemBtn->setToolTip(QStringLiteral("Remove selected scripture from service list"));
 	connect(serviceRemBtn, &QToolButton::clicked, this, &ScriptureDock::removeFromList);
 	serviceHeaderRow->addWidget(serviceRemBtn);
 
-	serviceUpBtn = new QToolButton(m_leftColumn);
+	serviceUpBtn = new QToolButton(scrollContent);
 	serviceUpBtn->setIcon(QIcon(QStringLiteral(":/icons/prev.svg")));
 	serviceUpBtn->setToolTip(QStringLiteral("Move up in service list"));
 	connect(serviceUpBtn, &QToolButton::clicked, this, &ScriptureDock::moveListItemUp);
 	serviceHeaderRow->addWidget(serviceUpBtn);
 
-	serviceDownBtn = new QToolButton(m_leftColumn);
+	serviceDownBtn = new QToolButton(scrollContent);
 	serviceDownBtn->setIcon(QIcon(QStringLiteral(":/icons/next.svg")));
 	serviceDownBtn->setToolTip(QStringLiteral("Move down in service list"));
 	connect(serviceDownBtn, &QToolButton::clicked, this, &ScriptureDock::moveListItemDown);
 	serviceHeaderRow->addWidget(serviceDownBtn);
 
-	m_leftLayout->addLayout(serviceHeaderRow);
+	contentLayout->addLayout(serviceHeaderRow);
 
-	serviceList = new QListWidget(m_leftColumn);
+	serviceList = new QListWidget(scrollContent);
 	serviceList->setItemDelegate(new ServiceListDelegate(serviceList));
 	serviceList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	serviceList->setMinimumHeight(120);
-	m_leftLayout->addWidget(serviceList, 1);
+	serviceList->setMinimumHeight(80);
+	serviceList->setMaximumHeight(130);
+	contentLayout->addWidget(serviceList);
 
-	// --- Right Column: Verses + Thumbnail + Controls ---
-	auto *versesHeaderRow = new QHBoxLayout();
-	versesHeaderLabel = new QLabel(QStringLiteral("VERSES"), m_rightColumn);
-	versesHeaderLabel->setFont(hFont);
-	versesHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
-	versesHeaderRow->addWidget(versesHeaderLabel, 1);
-	m_rightLayout->addLayout(versesHeaderRow);
+	scrollArea->setWidget(scrollContent);
+	root->addWidget(scrollArea, 1);
 
-	results = new QListWidget(m_rightColumn);
-	results->setItemDelegate(new VerseCardDelegate(results));
-	results->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	m_rightLayout->addWidget(results, 3);
-
-	// 16:9 Mini Program Thumbnail
-	thumbnail = new MiniProgramThumbnail(m_rightColumn);
-	m_rightLayout->addWidget(thumbnail, 2);
-
-	// Sticky Bottom Control Bar
+	// 3. Sticky Bottom Control Bar (pinned to bottom of dock)
 	auto *ctlRow = new QHBoxLayout();
 	ctlRow->setSpacing(6);
 
-	prevBtn = new QPushButton(QStringLiteral("◀"), m_rightColumn);
+	prevBtn = new QPushButton(QStringLiteral("◀"), this);
 	prevBtn->setToolTip(QStringLiteral("Previous Verse (Shift+Space)"));
 	prevBtn->setFixedHeight(34);
 	prevBtn->setMaximumWidth(40);
 	connect(prevBtn, &QPushButton::clicked, this, &ScriptureDock::prev);
 	ctlRow->addWidget(prevBtn);
 
-	liveButton = new QPushButton(QStringLiteral("On screen"), m_rightColumn);
+	liveButton = new QPushButton(QStringLiteral("On screen"), this);
 	liveButton->setObjectName(QStringLiteral("PrimaryShowBtn"));
 	liveButton->setStyleSheet(QStringLiteral(
 		"QPushButton#PrimaryShowBtn { background-color: #FFFFFF; color: #0F1115; font-weight: bold; border-radius: 6px; padding: 6px 14px; border: none; font-size: 13px; } "
@@ -365,35 +376,29 @@ void ScriptureDock::setupLayout()
 	connect(liveButton, &QPushButton::clicked, this, &ScriptureDock::goLive);
 	ctlRow->addWidget(liveButton, 2);
 
-	clearButton = new QPushButton(QStringLiteral("Clear"), m_rightColumn);
+	clearButton = new QPushButton(QStringLiteral("Clear"), this);
 	clearButton->setToolTip(QStringLiteral("Take scripture off screen (Esc)"));
 	clearButton->setFixedHeight(34);
 	connect(clearButton, &QPushButton::clicked, this, &ScriptureDock::clearLive);
 	ctlRow->addWidget(clearButton, 1);
 
-	nextBtn = new QPushButton(QStringLiteral("▶"), m_rightColumn);
+	nextBtn = new QPushButton(QStringLiteral("▶"), this);
 	nextBtn->setToolTip(QStringLiteral("Next Verse (Space)"));
 	nextBtn->setFixedHeight(34);
 	nextBtn->setMaximumWidth(40);
 	connect(nextBtn, &QPushButton::clicked, this, &ScriptureDock::next);
 	ctlRow->addWidget(nextBtn);
 
-	m_rightLayout->addLayout(ctlRow);
+	root->addLayout(ctlRow);
 
 	// Shortcut hint
-	shortcutHintLabel =
-		new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · Esc clear"), m_rightColumn);
+	shortcutHintLabel = new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · Esc clear"), this);
 	QFont hintFont = font();
 	hintFont.setPointSize(8);
 	shortcutHintLabel->setFont(hintFont);
 	shortcutHintLabel->setAlignment(Qt::AlignCenter);
 	shortcutHintLabel->setStyleSheet(QStringLiteral("color: #717886;"));
-	m_rightLayout->addWidget(shortcutHintLabel);
-
-	// Assemble layout into root
-	m_topLayout->addWidget(m_leftColumn, 1);
-	m_topLayout->addWidget(m_rightColumn, 1);
-	root->addLayout(m_topLayout, 1);
+	root->addWidget(shortcutHintLabel);
 
 	// Connect signals
 	connect(searchEdit, &QLineEdit::returnPressed, this, &ScriptureDock::runSearch);
@@ -403,29 +408,6 @@ void ScriptureDock::setupLayout()
 		&ScriptureDock::translationChanged);
 	connect(results, &QListWidget::currentRowChanged, this, &ScriptureDock::selectionChanged);
 	connect(serviceList, &QListWidget::itemDoubleClicked, this, &ScriptureDock::openListItem);
-}
-
-void ScriptureDock::resizeEvent(QResizeEvent *event)
-{
-	QWidget::resizeEvent(event);
-	bool wide = width() > 620;
-	if (wide != m_isWideLayout) {
-		updateResponsiveLayout(wide);
-	}
-}
-
-void ScriptureDock::updateResponsiveLayout(bool wide)
-{
-	m_isWideLayout = wide;
-	if (wide) {
-		m_leftColumn->setVisible(true);
-		m_rightColumn->setVisible(true);
-		m_topLayout->setDirection(QBoxLayout::LeftToRight);
-	} else {
-		m_leftColumn->setVisible(true);
-		m_rightColumn->setVisible(true);
-		m_topLayout->setDirection(QBoxLayout::TopToBottom);
-	}
 }
 
 void ScriptureDock::keyPressEvent(QKeyEvent *event)

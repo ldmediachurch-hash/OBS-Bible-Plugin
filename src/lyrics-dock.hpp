@@ -27,6 +27,7 @@ class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
+class QScrollArea;
 class QSplitter;
 class QToolButton;
 class QVBoxLayout;
@@ -70,7 +71,6 @@ private slots:
 	void selectCustomModel();
 
 protected:
-	void resizeEvent(QResizeEvent *event) override;
 	void keyPressEvent(QKeyEvent *event) override;
 
 private:
@@ -84,14 +84,11 @@ private:
 	void loadConfig();
 	void registerHotkeys();
 	bool openListIndex(int index, bool fromEnd = false);
-	void updateResponsiveLayout(bool wide);
 
 	// Layout widgets
-	QHBoxLayout *m_topLayout = nullptr;
-	QWidget *m_leftColumn = nullptr;
-	QWidget *m_rightColumn = nullptr;
-	QVBoxLayout *m_leftLayout = nullptr;
-	QVBoxLayout *m_rightLayout = nullptr;
+	QScrollArea *scrollArea = nullptr;
+	QWidget *scrollContent = nullptr;
+	QVBoxLayout *contentLayout = nullptr;
 
 	// Search & Gear
 	QLineEdit *searchEdit = nullptr;
@@ -135,7 +132,6 @@ private:
 	bool blanked = false;
 	int listIndex = -1;
 	int linesPerSlide = 2;
-	bool m_isWideLayout = false;
 
 	obs_hotkey_id hkNext = OBS_INVALID_HOTKEY_ID;
 	obs_hotkey_id hkPrev = OBS_INVALID_HOTKEY_ID;

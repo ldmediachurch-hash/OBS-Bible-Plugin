@@ -26,3 +26,6 @@
 
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
+
+# Exclude downloaded speech models
+data/models/*.bin

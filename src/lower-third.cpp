@@ -29,20 +29,33 @@ the Free Software Foundation; either version 2 of the License, or
 
 namespace {
 
+inline QColor obsColorToQColor(uint32_t val, int alpha = 255)
+{
+	int r = static_cast<int>(val & 0xFF);
+	int g = static_cast<int>((val >> 8) & 0xFF);
+	int b = static_cast<int>((val >> 16) & 0xFF);
+	return QColor(r, g, b, alpha);
+}
+
 struct LtSettings {
 	bool isLyrics = false;
 
 	// Background style & customization
-	std::string bgStyle = "light"; // "light", "dark", "custom", "transparent", "image"
-	uint32_t customBgColor = 0xFFFFFFFF;
-	int bgOpacity = 100; // 0 to 100%
+	std::string bgStyle = "light";       // "light", "dark", "custom", "transparent", "image"
+	uint32_t customBgColor = 0x00FFFFFF; // OBS BGR (white)
+	int bgOpacity = 100;                 // 0 to 100%
 	std::string bgImagePath;
 	std::string bgImageFit = "cover"; // "cover", "fit", "stretch"
-	int cornerRadius = 26; // px at 1080p
+	int cornerRadius = 26;            // px at 1080p
 
 	// Shadow controls
 	bool enableShadow = true;
 	int shadowOpacity = 100; // 0 to 100%
+
+	// Border / Boundary controls
+	bool enableBorder = false;
+	uint32_t borderColor = 0x00FFFFFF; // OBS BGR (white)
+	int borderWidth = 0;               // px at 1080p
 
 	// Typography & Font
 	std::string fontFamily = "Inter";
@@ -53,8 +66,8 @@ struct LtSettings {
 
 	// Colors
 	bool useCustomColors = false;
-	uint32_t textColor = 0xFF0F1115;
-	uint32_t kickerColor = 0xFF6A707A;
+	uint32_t textColor = 0x0015110F;   // OBS BGR for #0F1115
+	uint32_t kickerColor = 0x007A706A; // OBS BGR for #6A707A
 
 	// Header row controls
 	bool showKicker = true;
@@ -67,7 +80,7 @@ struct LtSettings {
 	int marginY = 64;
 
 	// Chips & Metadata
-	bool chips = true; // scripture translation labels
+	bool chips = true;     // scripture translation labels
 	bool showCcli = false; // lyrics CCLI
 
 	// Animation & Sample
@@ -76,24 +89,22 @@ struct LtSettings {
 };
 
 struct Palette {
-	QColor card, text, kicker, chipBg, chipText, divider, shadow;
+	QColor card, text, kicker, chipBg, chipText, divider, shadow, border;
 };
 
 Palette paletteFor(const LtSettings &s)
 {
 	Palette pal;
 	if (s.bgStyle == "dark") {
-		pal = {QColor(15, 17, 21, 240), QColor(255, 255, 255),
-		       QColor(163, 169, 178),   QColor(255, 255, 255, 30),
-		       QColor(230, 232, 235),   QColor(255, 255, 255, 40),
-		       QColor(0, 0, 0)};
+		pal = {QColor(15, 17, 21, 240),   QColor(255, 255, 255), QColor(163, 169, 178),
+		       QColor(255, 255, 255, 30), QColor(230, 232, 235), QColor(255, 255, 255, 40),
+		       QColor(0, 0, 0),           QColor(0, 0, 0, 0)};
 	} else if (s.bgStyle == "transparent") {
-		pal = {QColor(0, 0, 0, 0),     QColor(255, 255, 255),
-		       QColor(230, 232, 235),   QColor(255, 255, 255, 40),
-		       QColor(255, 255, 255),   QColor(255, 255, 255, 40),
-		       QColor(0, 0, 0)};
+		pal = {QColor(0, 0, 0, 0),        QColor(255, 255, 255), QColor(230, 232, 235),
+		       QColor(255, 255, 255, 40), QColor(255, 255, 255), QColor(255, 255, 255, 40),
+		       QColor(0, 0, 0),           QColor(0, 0, 0, 0)};
 	} else if (s.bgStyle == "custom") {
-		QColor bg(s.customBgColor);
+		QColor bg = obsColorToQColor(s.customBgColor);
 		bool lightBg = bg.lightness() > 128;
 		pal.card = bg;
 		pal.text = lightBg ? QColor(15, 17, 21) : QColor(255, 255, 255);
@@ -102,10 +113,11 @@ Palette paletteFor(const LtSettings &s)
 		pal.chipText = lightBg ? QColor(62, 68, 77) : QColor(230, 232, 235);
 		pal.divider = lightBg ? QColor(227, 229, 232) : QColor(255, 255, 255, 40);
 		pal.shadow = QColor(0, 0, 0);
+		pal.border = QColor(0, 0, 0, 0);
 	} else {
 		// "light" or "image"
 		pal = {QColor(255, 255, 255), QColor(15, 17, 21),    QColor(106, 112, 122), QColor(241, 242, 244),
-		       QColor(62, 68, 77),    QColor(227, 229, 232), QColor(6, 10, 26)};
+		       QColor(62, 68, 77),    QColor(227, 229, 232), QColor(6, 10, 26),     QColor(0, 0, 0, 0)};
 	}
 
 	// Apply card background opacity
@@ -116,8 +128,13 @@ Palette paletteFor(const LtSettings &s)
 
 	// Apply custom text/kicker colors if enabled
 	if (s.useCustomColors) {
-		pal.text = QColor(s.textColor);
-		pal.kicker = QColor(s.kickerColor);
+		pal.text = obsColorToQColor(s.textColor);
+		pal.kicker = obsColorToQColor(s.kickerColor);
+	}
+
+	// Apply border color if enabled
+	if (s.enableBorder && s.borderWidth > 0) {
+		pal.border = obsColorToQColor(s.borderColor);
 	}
 
 	return pal;
@@ -324,17 +341,19 @@ QImage renderCard(const DisplayContent &content, const LtSettings &s, uint32_t c
 			if (s.bgImageFit == "stretch") {
 				p.drawImage(card, bgImg);
 			} else if (s.bgImageFit == "fit") {
-				QImage scaled = bgImg.scaled(card.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+				QImage scaled = bgImg.scaled(card.size().toSize(), Qt::KeepAspectRatio,
+							     Qt::SmoothTransformation);
 				QRectF target((card.width() - scaled.width()) / 2 + card.left(),
-					      (card.height() - scaled.height()) / 2 + card.top(),
-					      scaled.width(), scaled.height());
+					      (card.height() - scaled.height()) / 2 + card.top(), scaled.width(),
+					      scaled.height());
 				p.drawImage(target, scaled);
 			} else {
 				// cover
-				QImage scaled = bgImg.scaled(card.size().toSize(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+				QImage scaled = bgImg.scaled(card.size().toSize(), Qt::KeepAspectRatioByExpanding,
+							     Qt::SmoothTransformation);
 				QRectF target((card.width() - scaled.width()) / 2 + card.left(),
-					      (card.height() - scaled.height()) / 2 + card.top(),
-					      scaled.width(), scaled.height());
+					      (card.height() - scaled.height()) / 2 + card.top(), scaled.width(),
+					      scaled.height());
 				p.drawImage(target, scaled);
 			}
 			p.restore();
@@ -343,6 +362,17 @@ QImage renderCard(const DisplayContent &content, const LtSettings &s, uint32_t c
 		}
 	} else {
 		p.fillPath(cardPath, pal.card);
+	}
+
+	// Card border / boundary
+	if (s.enableBorder && s.borderWidth > 0 && pal.border.alpha() > 0) {
+		p.save();
+		QPen bPen(pal.border, s.borderWidth * scale);
+		bPen.setJoinStyle(Qt::RoundJoin);
+		p.setPen(bPen);
+		p.setBrush(Qt::NoBrush);
+		p.drawRoundedRect(card, radius, radius);
+		p.restore();
 	}
 
 	qreal x = card.left() + padX;
@@ -364,12 +394,16 @@ QImage renderCard(const DisplayContent &content, const LtSettings &s, uint32_t c
 		p.setPen(pal.kicker);
 		const QString ref = content.reference.toUpper();
 
-		Qt::Alignment kickerAlign = Qt::AlignVCenter | (s.textAlign == "center" ? Qt::AlignHCenter : (s.textAlign == "right" ? Qt::AlignRight : Qt::AlignLeft));
+		Qt::Alignment kickerAlign = Qt::AlignVCenter |
+					    (s.textAlign == "center"
+						     ? Qt::AlignHCenter
+						     : (s.textAlign == "right" ? Qt::AlignRight : Qt::AlignLeft));
 
 		if (s.isLyrics) {
 			qreal availW = innerW - (s.showSignalDot ? (dot + 12 * scale) : 0);
 			if (s.showCcli && !content.ccli.trimmed().isEmpty()) {
-				Chip c = makeChip(QStringLiteral("CCLI %1").arg(content.ccli.trimmed()), scale, fontFamily);
+				Chip c = makeChip(QStringLiteral("CCLI %1").arg(content.ccli.trimmed()), scale,
+						  fontFamily);
 				const qreal chipX = card.right() - padX - c.w;
 				drawChip(p, c, chipX, y + (kickerH - c.h) / 2, pal);
 				availW = std::max<qreal>(0.0, chipX - 14 * scale - refX);
@@ -379,7 +413,8 @@ QImage renderCard(const DisplayContent &content, const LtSettings &s, uint32_t c
 			p.drawText(QRectF(refX, y, innerW - (refX - x), kickerH), kickerAlign, ref);
 			if (s.chips && n == 1 && !content.entries[0].label.isEmpty()) {
 				Chip c = makeChip(content.entries[0].label, scale, fontFamily);
-				drawChip(p, c, refX + kfm.horizontalAdvance(ref) + 14 * scale, y + (kickerH - c.h) / 2, pal);
+				drawChip(p, c, refX + kfm.horizontalAdvance(ref) + 14 * scale, y + (kickerH - c.h) / 2,
+					 pal);
 			}
 		}
 		y += kickerH + kickerGap;
@@ -499,6 +534,12 @@ void readCommonSettings(LtSettings &s, obs_data_t *d, bool isLyrics)
 	s.shadowOpacity = static_cast<int>(obs_data_get_int(d, "shadow_opacity"));
 	if (!obs_data_has_user_value(d, "shadow_opacity"))
 		s.shadowOpacity = 100;
+
+	s.enableBorder = obs_data_get_bool(d, "enable_border");
+	s.borderColor = static_cast<uint32_t>(obs_data_get_int(d, "border_color"));
+	s.borderWidth = static_cast<int>(obs_data_get_int(d, "border_width"));
+	if (!obs_data_has_user_value(d, "border_width"))
+		s.borderWidth = 2;
 
 	const char *ff = obs_data_get_string(d, "font_family");
 	s.fontFamily = (ff && strlen(ff) > 0) ? ff : "Inter";
@@ -633,6 +674,9 @@ void setCommonDefaults(obs_data_t *d, bool isLyrics)
 	obs_data_set_default_int(d, "corner_radius", 26);
 	obs_data_set_default_bool(d, "enable_shadow", true);
 	obs_data_set_default_int(d, "shadow_opacity", 100);
+	obs_data_set_default_bool(d, "enable_border", false);
+	obs_data_set_default_int(d, "border_color", 0x00FFFFFF);
+	obs_data_set_default_int(d, "border_width", 2);
 	obs_data_set_default_string(d, "font_family", "Inter");
 	obs_data_set_default_string(d, "font_weight", "medium");
 	obs_data_set_default_int(d, "font_size", isLyrics ? 44 : 40);
@@ -670,6 +714,7 @@ bool settings_modified(obs_properties_t *props, obs_property_t *, obs_data_t *se
 	bool isImage = strcmp(theme, "image") == 0;
 	bool isTransparent = strcmp(theme, "transparent") == 0;
 	bool hasShadow = obs_data_get_bool(settings, "enable_shadow");
+	bool hasBorder = obs_data_get_bool(settings, "enable_border");
 	bool customColors = obs_data_get_bool(settings, "use_custom_colors");
 	bool showKicker = obs_data_get_bool(settings, "show_kicker");
 
@@ -681,6 +726,9 @@ bool settings_modified(obs_properties_t *props, obs_property_t *, obs_data_t *se
 
 	obs_property_set_visible(obs_properties_get(props, "shadow_opacity"), hasShadow);
 
+	obs_property_set_visible(obs_properties_get(props, "border_color"), hasBorder);
+	obs_property_set_visible(obs_properties_get(props, "border_width"), hasBorder);
+
 	obs_property_set_visible(obs_properties_get(props, "text_color"), customColors);
 	obs_property_set_visible(obs_properties_get(props, "kicker_color"), customColors);
 
@@ -691,8 +739,8 @@ bool settings_modified(obs_properties_t *props, obs_property_t *, obs_data_t *se
 
 void addCommonProperties(obs_properties_t *props)
 {
-	obs_property_t *p =
-		obs_properties_add_list(props, "theme", "Background Style", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_t *p = obs_properties_add_list(props, "theme", "Background Style", OBS_COMBO_TYPE_LIST,
+						    OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(p, "Light Card (White)", "light");
 	obs_property_list_add_string(p, "Dark Card (Black)", "dark");
 	obs_property_list_add_string(p, "Custom Color Card", "custom");
@@ -705,7 +753,8 @@ void addCommonProperties(obs_properties_t *props)
 
 	obs_properties_add_path(props, "bg_image", "Background Image File", OBS_PATH_FILE,
 				"Image Files (*.png *.jpg *.jpeg *.bmp *.webp *.svg)", nullptr);
-	p = obs_properties_add_list(props, "bg_image_fit", "Image Scaling", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	p = obs_properties_add_list(props, "bg_image_fit", "Image Scaling", OBS_COMBO_TYPE_LIST,
+				    OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(p, "Cover (Fill entire card)", "cover");
 	obs_property_list_add_string(p, "Fit (Maintain aspect ratio)", "fit");
 	obs_property_list_add_string(p, "Stretch (Fill exactly)", "stretch");
@@ -715,6 +764,11 @@ void addCommonProperties(obs_properties_t *props)
 	p = obs_properties_add_bool(props, "enable_shadow", "Drop Shadow");
 	obs_property_set_modified_callback(p, settings_modified);
 	obs_properties_add_int(props, "shadow_opacity", "Shadow Intensity (%)", 0, 100, 5);
+
+	p = obs_properties_add_bool(props, "enable_border", "Card Border / Boundary");
+	obs_property_set_modified_callback(p, settings_modified);
+	obs_properties_add_color(props, "border_color", "Border Color");
+	obs_properties_add_int(props, "border_width", "Border Thickness (px)", 1, 10, 1);
 
 	p = obs_properties_add_list(props, "font_family", "Font Family", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(p, "Inter (Modern UI)", "Inter");
@@ -767,8 +821,8 @@ obs_properties_t *lt_properties(void *)
 	obs_properties_t *props = obs_properties_create();
 	addCommonProperties(props);
 
-	obs_property_t *p =
-		obs_properties_add_list(props, "layout", "Two Translations Layout", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_t *p = obs_properties_add_list(props, "layout", "Two Translations Layout", OBS_COMBO_TYPE_LIST,
+						    OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(p, "Side by side", "side");
 	obs_property_list_add_string(p, "Stacked", "stacked");
 

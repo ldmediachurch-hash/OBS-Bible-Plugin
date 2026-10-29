@@ -206,20 +206,27 @@ public:
 		p->setFont(titleFont);
 		p->setPen(isSelected ? Qt::white : QColor(220, 224, 230));
 
-		const int margin = 8;
-		const int titleW = static_cast<int>(r.width() * 0.65) - margin;
-		QRect titleRect(r.left() + margin, r.top(), titleW, r.height());
-		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
+		QFontMetrics fmTitle(titleFont);
+		QFont authorFont = option.font;
+		authorFont.setPointSize(std::max(7, authorFont.pointSize() - 1));
+		QFontMetrics fmAuthor(authorFont);
 
+		const int margin = 8;
+		int authorW = 0;
 		if (!author.isEmpty()) {
-			QFont authorFont = option.font;
-			authorFont.setPointSize(authorFont.pointSize() - 1);
+			authorW = std::min(fmAuthor.horizontalAdvance(author) + 4, static_cast<int>(r.width() * 0.35));
+		}
+		int titleW = r.width() - margin * 2 - (authorW > 0 ? (authorW + 8) : 0);
+		QString elidedTitle = fmTitle.elidedText(title, Qt::ElideRight, titleW);
+		QRect titleRect(r.left() + margin, r.top(), titleW, r.height());
+		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, elidedTitle);
+
+		if (authorW > 0) {
 			p->setFont(authorFont);
 			p->setPen(QColor(130, 137, 150));
-			const int authorX = r.left() + static_cast<int>(r.width() * 0.65);
-			const int authorW = static_cast<int>(r.width() * 0.35) - margin;
-			QRect authorRect(authorX, r.top(), authorW, r.height());
-			p->drawText(authorRect, Qt::AlignRight | Qt::AlignVCenter, author);
+			QString elidedAuthor = fmAuthor.elidedText(author, Qt::ElideRight, authorW);
+			QRect authorRect(r.right() - margin - authorW, r.top(), authorW, r.height());
+			p->drawText(authorRect, Qt::AlignRight | Qt::AlignVCenter, elidedAuthor);
 		}
 
 		p->restore();
@@ -327,23 +334,21 @@ void LyricsDock::setupLayout()
 
 	root->addLayout(searchRow);
 
-	// 2. Main content container (supports 1-column or 2-column responsive layout)
-	m_topLayout = new QHBoxLayout();
-	m_topLayout->setSpacing(8);
+	// 2. Vertical scroll area for all content
+	scrollArea = new QScrollArea(this);
+	scrollArea->setWidgetResizable(true);
+	scrollArea->setFrameShape(QFrame::NoFrame);
+	scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
-	m_leftColumn = new QWidget(this);
-	m_leftLayout = new QVBoxLayout(m_leftColumn);
-	m_leftLayout->setContentsMargins(0, 0, 0, 0);
-	m_leftLayout->setSpacing(6);
-
-	m_rightColumn = new QWidget(this);
-	m_rightLayout = new QVBoxLayout(m_rightColumn);
-	m_rightLayout->setContentsMargins(0, 0, 0, 0);
-	m_rightLayout->setSpacing(6);
+	scrollContent = new QWidget(scrollArea);
+	contentLayout = new QVBoxLayout(scrollContent);
+	contentLayout->setContentsMargins(0, 0, 0, 0);
+	contentLayout->setSpacing(8);
 
 	// --- Library Section ---
 	auto *libHeaderRow = new QHBoxLayout();
-	libraryHeaderLabel = new QLabel(QStringLiteral("LIBRARY · 0"), m_leftColumn);
+	libraryHeaderLabel = new QLabel(QStringLiteral("LIBRARY · 0"), scrollContent);
 	QFont hFont = font();
 	hFont.setPointSize(8);
 	hFont.setBold(true);
@@ -352,7 +357,7 @@ void LyricsDock::setupLayout()
 	libraryHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
 	libHeaderRow->addWidget(libraryHeaderLabel, 1);
 
-	importBtn = new QToolButton(m_leftColumn);
+	importBtn = new QToolButton(scrollContent);
 	importBtn->setText(QStringLiteral("Import ▾"));
 	importBtn->setPopupMode(QToolButton::InstantPopup);
 	auto *importMenu = new QMenu(importBtn);
@@ -363,62 +368,23 @@ void LyricsDock::setupLayout()
 	importMenu->addAction(QStringLiteral("Open Songs Folder"), this, &LyricsDock::openSongsFolder);
 	importBtn->setMenu(importMenu);
 	libHeaderRow->addWidget(importBtn);
-	m_leftLayout->addLayout(libHeaderRow);
+	contentLayout->addLayout(libHeaderRow);
 
-	songList = new QListWidget(m_leftColumn);
+	songList = new QListWidget(scrollContent);
 	songList->setItemDelegate(new SongListDelegate(songList));
 	songList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	songList->setMinimumHeight(100);
-	m_leftLayout->addWidget(songList, 2);
-
-	// --- Setlist Section ---
-	auto *setlistHeaderRow = new QHBoxLayout();
-	setlistHeaderLabel = new QLabel(QStringLiteral("SETLIST · 0"), m_leftColumn);
-	setlistHeaderLabel->setFont(hFont);
-	setlistHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
-	setlistHeaderRow->addWidget(setlistHeaderLabel, 1);
-
-	setlistAddBtn = new QToolButton(m_leftColumn);
-	setlistAddBtn->setIcon(QIcon(QStringLiteral(":/icons/plus.svg")));
-	setlistAddBtn->setToolTip(QStringLiteral("Add current song to setlist"));
-	connect(setlistAddBtn, &QToolButton::clicked, this, &LyricsDock::addToList);
-	setlistHeaderRow->addWidget(setlistAddBtn);
-
-	setlistRemBtn = new QToolButton(m_leftColumn);
-	setlistRemBtn->setIcon(QIcon(QStringLiteral(":/icons/minus.svg")));
-	setlistRemBtn->setToolTip(QStringLiteral("Remove selected song from setlist"));
-	connect(setlistRemBtn, &QToolButton::clicked, this, &LyricsDock::removeFromList);
-	setlistHeaderRow->addWidget(setlistRemBtn);
-
-	setlistUpBtn = new QToolButton(m_leftColumn);
-	setlistUpBtn->setIcon(QIcon(QStringLiteral(":/icons/prev.svg")));
-	setlistUpBtn->setToolTip(QStringLiteral("Move up in setlist"));
-	connect(setlistUpBtn, &QToolButton::clicked, this, &LyricsDock::moveListItemUp);
-	setlistHeaderRow->addWidget(setlistUpBtn);
-
-	setlistDownBtn = new QToolButton(m_leftColumn);
-	setlistDownBtn->setIcon(QIcon(QStringLiteral(":/icons/next.svg")));
-	setlistDownBtn->setToolTip(QStringLiteral("Move down in setlist"));
-	connect(setlistDownBtn, &QToolButton::clicked, this, &LyricsDock::moveListItemDown);
-	setlistHeaderRow->addWidget(setlistDownBtn);
-
-	m_leftLayout->addLayout(setlistHeaderRow);
-
-	setlist = new QListWidget(m_leftColumn);
-	setlist->setItemDelegate(new SetlistDelegate(setlist));
-	setlist->setDragDropMode(QAbstractItemView::InternalMove);
-	setlist->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	setlist->setMinimumHeight(90);
-	m_leftLayout->addWidget(setlist, 1);
+	songList->setMinimumHeight(84);
+	songList->setMaximumHeight(130);
+	contentLayout->addWidget(songList);
 
 	// --- Slides Section ---
 	auto *slidesHeaderRow = new QHBoxLayout();
-	slidesHeaderLabel = new QLabel(QStringLiteral("SLIDES"), m_rightColumn);
+	slidesHeaderLabel = new QLabel(QStringLiteral("SLIDES"), scrollContent);
 	slidesHeaderLabel->setFont(hFont);
 	slidesHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
 	slidesHeaderRow->addWidget(slidesHeaderLabel, 1);
 
-	linesBtn = new QToolButton(m_rightColumn);
+	linesBtn = new QToolButton(scrollContent);
 	linesBtn->setText(QStringLiteral("2 lines ▾"));
 	linesBtn->setPopupMode(QToolButton::InstantPopup);
 	auto *linesMenu = new QMenu(linesBtn);
@@ -432,37 +398,82 @@ void LyricsDock::setupLayout()
 	connect(act4, &QAction::triggered, this, [this]() { setLinesPerSlide(4); });
 	linesBtn->setMenu(linesMenu);
 	slidesHeaderRow->addWidget(linesBtn);
-	m_rightLayout->addLayout(slidesHeaderRow);
+	contentLayout->addLayout(slidesHeaderRow);
 
 	// Section Chips
-	sectionContainer = new QWidget(m_rightColumn);
+	sectionContainer = new QWidget(scrollContent);
 	sectionLayout = new QHBoxLayout(sectionContainer);
 	sectionLayout->setContentsMargins(0, 0, 0, 0);
 	sectionLayout->setSpacing(4);
-	m_rightLayout->addWidget(sectionContainer);
+	contentLayout->addWidget(sectionContainer);
 
 	// Slide Cards
-	slideList = new QListWidget(m_rightColumn);
+	slideList = new QListWidget(scrollContent);
 	slideList->setItemDelegate(new SlideCardDelegate(slideList));
 	slideList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	m_rightLayout->addWidget(slideList, 3);
+	slideList->setMinimumHeight(150);
+	contentLayout->addWidget(slideList);
 
 	// 16:9 Mini Program Thumbnail
-	thumbnail = new MiniProgramThumbnail(m_rightColumn);
-	m_rightLayout->addWidget(thumbnail, 2);
+	thumbnail = new MiniProgramThumbnail(scrollContent);
+	contentLayout->addWidget(thumbnail);
 
-	// Sticky Bottom Control Bar
+	// --- Setlist Section ---
+	auto *setlistHeaderRow = new QHBoxLayout();
+	setlistHeaderLabel = new QLabel(QStringLiteral("SETLIST · 0"), scrollContent);
+	setlistHeaderLabel->setFont(hFont);
+	setlistHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
+	setlistHeaderRow->addWidget(setlistHeaderLabel, 1);
+
+	setlistAddBtn = new QToolButton(scrollContent);
+	setlistAddBtn->setIcon(QIcon(QStringLiteral(":/icons/plus.svg")));
+	setlistAddBtn->setToolTip(QStringLiteral("Add current song to setlist"));
+	connect(setlistAddBtn, &QToolButton::clicked, this, &LyricsDock::addToList);
+	setlistHeaderRow->addWidget(setlistAddBtn);
+
+	setlistRemBtn = new QToolButton(scrollContent);
+	setlistRemBtn->setIcon(QIcon(QStringLiteral(":/icons/minus.svg")));
+	setlistRemBtn->setToolTip(QStringLiteral("Remove selected song from setlist"));
+	connect(setlistRemBtn, &QToolButton::clicked, this, &LyricsDock::removeFromList);
+	setlistHeaderRow->addWidget(setlistRemBtn);
+
+	setlistUpBtn = new QToolButton(scrollContent);
+	setlistUpBtn->setIcon(QIcon(QStringLiteral(":/icons/prev.svg")));
+	setlistUpBtn->setToolTip(QStringLiteral("Move up in setlist"));
+	connect(setlistUpBtn, &QToolButton::clicked, this, &LyricsDock::moveListItemUp);
+	setlistHeaderRow->addWidget(setlistUpBtn);
+
+	setlistDownBtn = new QToolButton(scrollContent);
+	setlistDownBtn->setIcon(QIcon(QStringLiteral(":/icons/next.svg")));
+	setlistDownBtn->setToolTip(QStringLiteral("Move down in setlist"));
+	connect(setlistDownBtn, &QToolButton::clicked, this, &LyricsDock::moveListItemDown);
+	setlistHeaderRow->addWidget(setlistDownBtn);
+
+	contentLayout->addLayout(setlistHeaderRow);
+
+	setlist = new QListWidget(scrollContent);
+	setlist->setItemDelegate(new SetlistDelegate(setlist));
+	setlist->setDragDropMode(QAbstractItemView::InternalMove);
+	setlist->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	setlist->setMinimumHeight(80);
+	setlist->setMaximumHeight(130);
+	contentLayout->addWidget(setlist);
+
+	scrollArea->setWidget(scrollContent);
+	root->addWidget(scrollArea, 1);
+
+	// 3. Sticky Bottom Control Bar (pinned to bottom of dock)
 	auto *ctlRow = new QHBoxLayout();
 	ctlRow->setSpacing(6);
 
-	prevBtn = new QPushButton(QStringLiteral("◀"), m_rightColumn);
+	prevBtn = new QPushButton(QStringLiteral("◀"), this);
 	prevBtn->setToolTip(QStringLiteral("Previous Slide (Shift+Space)"));
 	prevBtn->setFixedHeight(34);
 	prevBtn->setMaximumWidth(40);
 	connect(prevBtn, &QPushButton::clicked, this, &LyricsDock::prev);
 	ctlRow->addWidget(prevBtn);
 
-	liveButton = new QPushButton(QStringLiteral("On screen"), m_rightColumn);
+	liveButton = new QPushButton(QStringLiteral("On screen"), this);
 	liveButton->setObjectName(QStringLiteral("PrimaryShowBtn"));
 	liveButton->setStyleSheet(QStringLiteral(
 		"QPushButton#PrimaryShowBtn { background-color: #FFFFFF; color: #0F1115; font-weight: bold; border-radius: 6px; padding: 6px 14px; border: none; font-size: 13px; } "
@@ -473,42 +484,37 @@ void LyricsDock::setupLayout()
 	connect(liveButton, &QPushButton::clicked, this, &LyricsDock::goLive);
 	ctlRow->addWidget(liveButton, 2);
 
-	blankButton = new QPushButton(QStringLiteral("Blank"), m_rightColumn);
+	blankButton = new QPushButton(QStringLiteral("Blank"), this);
 	blankButton->setCheckable(true);
 	blankButton->setToolTip(QStringLiteral("Keep live state but hide card for instrumental breaks (B)"));
 	blankButton->setFixedHeight(34);
 	connect(blankButton, &QPushButton::clicked, this, &LyricsDock::toggleBlank);
 	ctlRow->addWidget(blankButton, 1);
 
-	clearButton = new QPushButton(QStringLiteral("Clear"), m_rightColumn);
+	clearButton = new QPushButton(QStringLiteral("Clear"), this);
 	clearButton->setToolTip(QStringLiteral("Take lyrics off screen (Esc)"));
 	clearButton->setFixedHeight(34);
 	connect(clearButton, &QPushButton::clicked, this, &LyricsDock::clearLive);
 	ctlRow->addWidget(clearButton, 1);
 
-	nextBtn = new QPushButton(QStringLiteral("▶"), m_rightColumn);
+	nextBtn = new QPushButton(QStringLiteral("▶"), this);
 	nextBtn->setToolTip(QStringLiteral("Next Slide (Space)"));
 	nextBtn->setFixedHeight(34);
 	nextBtn->setMaximumWidth(40);
 	connect(nextBtn, &QPushButton::clicked, this, &LyricsDock::next);
 	ctlRow->addWidget(nextBtn);
 
-	m_rightLayout->addLayout(ctlRow);
+	root->addLayout(ctlRow);
 
 	// Keyboard shortcut hints row
-	shortcutHintLabel = new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · B blank · Esc clear"),
-				       m_rightColumn);
+	shortcutHintLabel =
+		new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · B blank · Esc clear"), this);
 	QFont hintFont = font();
 	hintFont.setPointSize(8);
 	shortcutHintLabel->setFont(hintFont);
 	shortcutHintLabel->setAlignment(Qt::AlignCenter);
 	shortcutHintLabel->setStyleSheet(QStringLiteral("color: #717886;"));
-	m_rightLayout->addWidget(shortcutHintLabel);
-
-	// Assemble layout into root
-	m_topLayout->addWidget(m_leftColumn, 1);
-	m_topLayout->addWidget(m_rightColumn, 1);
-	root->addLayout(m_topLayout, 1);
+	root->addWidget(shortcutHintLabel);
 
 	// Connect signals
 	connect(searchEdit, &QLineEdit::textChanged, this, &LyricsDock::searchTextChanged);
@@ -516,29 +522,6 @@ void LyricsDock::setupLayout()
 	connect(songList, &QListWidget::itemDoubleClicked, this, &LyricsDock::songSelected);
 	connect(slideList, &QListWidget::currentRowChanged, this, &LyricsDock::slideSelectionChanged);
 	connect(setlist, &QListWidget::itemDoubleClicked, this, &LyricsDock::openListItem);
-}
-
-void LyricsDock::resizeEvent(QResizeEvent *event)
-{
-	QWidget::resizeEvent(event);
-	bool wide = width() > 620;
-	if (wide != m_isWideLayout) {
-		updateResponsiveLayout(wide);
-	}
-}
-
-void LyricsDock::updateResponsiveLayout(bool wide)
-{
-	m_isWideLayout = wide;
-	if (wide) {
-		m_leftColumn->setVisible(true);
-		m_rightColumn->setVisible(true);
-		m_topLayout->setDirection(QBoxLayout::LeftToRight);
-	} else {
-		m_leftColumn->setVisible(true);
-		m_rightColumn->setVisible(true);
-		m_topLayout->setDirection(QBoxLayout::TopToBottom);
-	}
 }
 
 void LyricsDock::keyPressEvent(QKeyEvent *event)

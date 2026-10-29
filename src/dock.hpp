@@ -26,6 +26,7 @@ class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
+class QScrollArea;
 class QToolButton;
 class QVBoxLayout;
 
@@ -62,7 +63,6 @@ private slots:
 	void openGearMenu();
 
 protected:
-	void resizeEvent(QResizeEvent *event) override;
 	void keyPressEvent(QKeyEvent *event) override;
 
 private:
@@ -78,14 +78,11 @@ private:
 	BiblePtr primary() const;
 	BiblePtr secondary() const;
 	bool openListIndex(int index, bool fromEnd);
-	void updateResponsiveLayout(bool wide);
 
 	// Layout widgets
-	QHBoxLayout *m_topLayout = nullptr;
-	QWidget *m_leftColumn = nullptr;
-	QWidget *m_rightColumn = nullptr;
-	QVBoxLayout *m_leftLayout = nullptr;
-	QVBoxLayout *m_rightLayout = nullptr;
+	QScrollArea *scrollArea = nullptr;
+	QWidget *scrollContent = nullptr;
+	QVBoxLayout *contentLayout = nullptr;
 
 	// Search & Options
 	QLineEdit *searchEdit = nullptr;
@@ -118,7 +115,6 @@ private:
 	int listIndex = -1;
 	int rangeEnd = 0;
 	bool searchIsKeyword = false;
-	bool m_isWideLayout = false;
 
 	obs_hotkey_id hkNext = OBS_INVALID_HOTKEY_ID;
 	obs_hotkey_id hkPrev = OBS_INVALID_HOTKEY_ID;
