@@ -223,7 +223,8 @@ static bool matchLyrics(const QString &observedRef, const QString &observedTitle
 	if (expSection.isEmpty())
 		return true;
 
-	return obs.contains(expSection) || obs.contains(expSection.replace(QStringLiteral("verse "), QStringLiteral("v")));
+	return obs.contains(expSection) ||
+	       obs.contains(expSection.replace(QStringLiteral("verse "), QStringLiteral("v")));
 }
 
 int main(int argc, char *argv[])
@@ -237,14 +238,16 @@ int main(int argc, char *argv[])
 	parser.addHelpOption();
 	parser.addVersionOption();
 
-	QCommandLineOption wavOpt(QStringLiteral("wav"), QStringLiteral("Input audio WAV file"), QStringLiteral("path"));
+	QCommandLineOption wavOpt(QStringLiteral("wav"), QStringLiteral("Input audio WAV file"),
+				  QStringLiteral("path"));
 	QCommandLineOption truthOpt(QStringLiteral("truth"), QStringLiteral("Ground-truth CSV file"),
 				    QStringLiteral("path"));
 	QCommandLineOption modelOpt(QStringLiteral("model"), QStringLiteral("Whisper GGML model file"),
 				    QStringLiteral("path"));
 	QCommandLineOption songsOpt(QStringLiteral("songs-dir"), QStringLiteral("Songs sample directory"),
 				    QStringLiteral("path"));
-	QCommandLineOption speedOpt(QStringLiteral("speed"), QStringLiteral("Playback speed (0=unthrottled, 1.0=realtime)"),
+	QCommandLineOption speedOpt(QStringLiteral("speed"),
+				    QStringLiteral("Playback speed (0=unthrottled, 1.0=realtime)"),
 				    QStringLiteral("multiplier"), QStringLiteral("0"));
 	QCommandLineOption verboseOpt(QStringLiteral("verbose"), QStringLiteral("Enable debug logging"));
 
@@ -288,9 +291,12 @@ int main(int argc, char *argv[])
 			QStringLiteral("data/models/ggml-tiny.en.bin"),
 			QStringLiteral("../data/models/ggml-base.en.bin"),
 			QStringLiteral("../data/models/ggml-tiny.en.bin"),
-			QDir::homePath() + QStringLiteral("/Library/Application Support/obs-studio/plugin_config/ld-scripture/models/ggml-base.en.bin"),
-			QDir::homePath() + QStringLiteral("/Library/Application Support/obs-studio/plugin_config/ld-scripture/models/ggml-tiny.en.bin")
-		};
+			QDir::homePath() +
+				QStringLiteral(
+					"/Library/Application Support/obs-studio/plugin_config/ld-scripture/models/ggml-base.en.bin"),
+			QDir::homePath() +
+				QStringLiteral(
+					"/Library/Application Support/obs-studio/plugin_config/ld-scripture/models/ggml-tiny.en.bin")};
 		for (const auto &c : candidates) {
 			if (QFile::exists(c)) {
 				modelPath = c;
@@ -307,10 +313,10 @@ int main(int argc, char *argv[])
 	// 4. Load Songs
 	if (songsDir.isEmpty()) {
 		QStringList candidates = {
-			QStringLiteral("data/songs-samples"),
-			QStringLiteral("../data/songs-samples"),
-			QDir::homePath() + QStringLiteral("/Library/Application Support/obs-studio/plugin_config/ld-scripture/songs")
-		};
+			QStringLiteral("data/songs-samples"), QStringLiteral("../data/songs-samples"),
+			QDir::homePath() +
+				QStringLiteral(
+					"/Library/Application Support/obs-studio/plugin_config/ld-scripture/songs")};
 		for (const auto &c : candidates) {
 			if (QDir(c).exists()) {
 				songsDir = c;
@@ -466,8 +472,9 @@ int main(int argc, char *argv[])
 	std::cout << "Audio File:       " << wavPath.toStdString() << " (" << totalDurationSec << " s)\n";
 	std::cout << "Ground Truth:     " << truthPath.toStdString() << " (" << truthEvents.size() << " events)\n";
 	std::cout << "Model:            " << QFileInfo(modelPath).fileName().toStdString() << "\n";
-	std::cout << "Benchmark Time:   " << elapsedWallSec << " s (Real-time speed: "
-		  << (elapsedWallSec > 0 ? (totalDurationSec / elapsedWallSec) : 0.0) << "x)\n";
+	std::cout << "Benchmark Time:   " << elapsedWallSec
+		  << " s (Real-time speed: " << (elapsedWallSec > 0 ? (totalDurationSec / elapsedWallSec) : 0.0)
+		  << "x)\n";
 	std::cout << "--------------------------------------------------------------------------------\n";
 	std::cout << "--- SCRIPTURE RESULTS ---\n";
 	std::cout << "  Expected Events:    " << scripTotal << "\n";
@@ -489,7 +496,8 @@ int main(int argc, char *argv[])
 	int totalExpected = scripTotal + lyricsTotal;
 	int totalRecalled = scripRecalled + lyricsRecalled;
 	double totalRecallPct = totalExpected > 0 ? (100.0 * totalRecalled / totalExpected) : 0.0;
-	std::cout << "  Overall Recall:     " << totalRecallPct << "% (" << totalRecalled << "/" << totalExpected << ")\n";
+	std::cout << "  Overall Recall:     " << totalRecallPct << "% (" << totalRecalled << "/" << totalExpected
+		  << ")\n";
 	std::cout << "  Overall False/10m:  " << (scripFalse10m + lyricsFalse10m) << " per 10 min\n";
 	std::cout << "================================================================================\n\n";
 

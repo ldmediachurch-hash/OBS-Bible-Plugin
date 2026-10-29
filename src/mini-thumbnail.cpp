@@ -12,8 +12,7 @@ the Free Software Foundation; either version 2 of the License, or
 
 #include <QPainterPath>
 
-MiniProgramThumbnail::MiniProgramThumbnail(QWidget *parent)
-	: QWidget(parent)
+MiniProgramThumbnail::MiniProgramThumbnail(QWidget *parent) : QWidget(parent)
 {
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 	setMinimumHeight(110);

@@ -25,8 +25,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include <cmath>
 #include <cstdio>
 
-DetectionCore::DetectionCore(QObject *parent)
-	: QObject(parent)
+DetectionCore::DetectionCore(QObject *parent) : QObject(parent)
 {
 	m_ringBuffer.resize(kBufferSize, 0.0f);
 	const char *debugEnv = getenv("LDWW_DEBUG");
@@ -369,7 +368,8 @@ void DetectionCore::analyzeBuffer(const std::vector<float> &chunk, double window
 
 	const QString committedText = m_committedWords.join(QLatin1Char(' '));
 	const QString tentativeText = m_tentativeWords.join(QLatin1Char(' '));
-	const QString combinedText = committedText.isEmpty() ? tentativeText : (committedText + QLatin1Char(' ') + tentativeText);
+	const QString combinedText = committedText.isEmpty() ? tentativeText
+							     : (committedText + QLatin1Char(' ') + tentativeText);
 
 	emit transcriptCommitted(committedText, windowEndSec);
 	if (!tentativeText.isEmpty()) {
@@ -377,8 +377,10 @@ void DetectionCore::analyzeBuffer(const std::vector<float> &chunk, double window
 	}
 
 	if (m_debugLogging.load(std::memory_order_relaxed)) {
-		fprintf(stderr, "[LDWW Core] @ %.2fs: [Committed: \"%s\"] [Tentative: \"%s\"] (VAD=%.1fms, Whisper=%.1fms)\n",
-			windowEndSec, committedText.toUtf8().constData(), tentativeText.toUtf8().constData(), vadMs, whisperMs);
+		fprintf(stderr,
+			"[LDWW Core] @ %.2fs: [Committed: \"%s\"] [Tentative: \"%s\"] (VAD=%.1fms, Whisper=%.1fms)\n",
+			windowEndSec, committedText.toUtf8().constData(), tentativeText.toUtf8().constData(), vadMs,
+			whisperMs);
 	}
 
 	// 4. Pattern matching on committed + tentative
@@ -427,7 +429,8 @@ QString DetectionCore::transcribeChunk(const std::vector<float> &chunk)
 	wparams.audio_ctx = 150;
 
 	// Phase 2: Short neutral prompt + last ~20 committed words for context
-	static const QString basePrompt = QStringLiteral("Sermon scripture reading and hymn lyrics like Romans 8:28, John 3:16. ");
+	static const QString basePrompt =
+		QStringLiteral("Sermon scripture reading and hymn lyrics like Romans 8:28, John 3:16. ");
 	QString contextPrompt = basePrompt;
 	if (!m_committedWords.isEmpty()) {
 		int start = std::max(0, static_cast<int>(m_committedWords.size()) - 20);
@@ -484,12 +487,12 @@ QString DetectionCore::normalizeSpokenText(QString s)
 	static const struct {
 		const char *word;
 		int val;
-	} kNumWords[] = {{"one", 1},        {"two", 2},       {"three", 3},     {"four", 4},      {"five", 5},
-			 {"six", 6},        {"seven", 7},     {"eight", 8},     {"nine", 9},      {"ten", 10},
-			 {"eleven", 11},    {"twelve", 12},   {"thirteen", 13}, {"fourteen", 14}, {"fifteen", 15},
-			 {"sixteen", 16},   {"seventeen", 17}, {"eighteen", 18}, {"nineteen", 19}, {"twenty", 20},
-			 {"thirty", 30},    {"forty", 40},    {"fifty", 50},    {"sixty", 60},    {"seventy", 70},
-			 {"eighty", 80},    {"ninety", 90},   {"hundred", 100}};
+	} kNumWords[] = {{"one", 1},      {"two", 2},        {"three", 3},     {"four", 4},      {"five", 5},
+			 {"six", 6},      {"seven", 7},      {"eight", 8},     {"nine", 9},      {"ten", 10},
+			 {"eleven", 11},  {"twelve", 12},    {"thirteen", 13}, {"fourteen", 14}, {"fifteen", 15},
+			 {"sixteen", 16}, {"seventeen", 17}, {"eighteen", 18}, {"nineteen", 19}, {"twenty", 20},
+			 {"thirty", 30},  {"forty", 40},     {"fifty", 50},    {"sixty", 60},    {"seventy", 70},
+			 {"eighty", 80},  {"ninety", 90},    {"hundred", 100}};
 	for (const auto &nw : kNumWords) {
 		s.replace(QRegularExpression(QStringLiteral("\\b%1\\b").arg(nw.word)), QString::number(nw.val));
 	}
@@ -518,7 +521,8 @@ QString DetectionCore::normalizeSpokenText(QString s)
 	}
 
 	// Verse range normalizations: "verse 16 to 18" -> "verse 16"
-	s.replace(QRegularExpression(QStringLiteral("\\bverses?\\s*(\\d+)\\s*(?:to|through|-)\\s*\\d+")), QStringLiteral("verse \\1"));
+	s.replace(QRegularExpression(QStringLiteral("\\bverses?\\s*(\\d+)\\s*(?:to|through|-)\\s*\\d+")),
+		  QStringLiteral("verse \\1"));
 	s.replace(QRegularExpression(QStringLiteral("\\bfrom\\s+verses?\\s*(\\d+)")), QStringLiteral("verse \\1"));
 
 	return s.simplified();
@@ -559,7 +563,8 @@ bool DetectionCore::detectScripture(const QString &rawTranscript, double streamT
 		if (mVs.hasMatch()) {
 			int vs = mVs.captured(1).toInt();
 			if (vs > 0 && vs != m_contextVerse) {
-				QString ref = QStringLiteral("%1 %2:%3").arg(m_contextBook).arg(m_contextChapter).arg(vs);
+				QString ref =
+					QStringLiteral("%1 %2:%3").arg(m_contextBook).arg(m_contextChapter).arg(vs);
 				if (ref != m_lastSuggestedRef || (streamTimeSec - m_lastSuggestionStreamTime > 20.0)) {
 					m_lastSuggestedRef = ref;
 					m_contextVerse = vs;
@@ -648,50 +653,120 @@ bool DetectionCore::detectScripture(const QString &rawTranscript, double streamT
 		const char *canonical;
 	};
 
-	static const BookAlias kAliases[] = {
-		{"1 thessalonians", "1 Thessalonians"}, {"first thessalonians", "1 Thessalonians"}, {"1st thessalonians", "1 Thessalonians"},
-		{"2 thessalonians", "2 Thessalonians"}, {"second thessalonians", "2 Thessalonians"}, {"2nd thessalonians", "2 Thessalonians"},
-		{"1 chronicles", "1 Chronicles"}, {"first chronicles", "1 Chronicles"}, {"1st chronicles", "1 Chronicles"},
-		{"2 chronicles", "2 Chronicles"}, {"second chronicles", "2 Chronicles"}, {"2nd chronicles", "2 Chronicles"},
-		{"1 corinthians", "1 Corinthians"}, {"first corinthians", "1 Corinthians"}, {"1st corinthians", "1 Corinthians"},
-		{"2 corinthians", "2 Corinthians"}, {"second corinthians", "2 Corinthians"}, {"2nd corinthians", "2 Corinthians"},
-		{"song of solomon", "Song of Solomon"}, {"song of songs", "Song of Solomon"}, {"canticles", "Song of Solomon"},
-		{"1 timothy", "1 Timothy"}, {"first timothy", "1 Timothy"}, {"1st timothy", "1 Timothy"},
-		{"2 timothy", "2 Timothy"}, {"second timothy", "2 Timothy"}, {"2nd timothy", "2 Timothy"},
-		{"1 samuel", "1 Samuel"}, {"first samuel", "1 Samuel"}, {"1st samuel", "1 Samuel"},
-		{"2 samuel", "2 Samuel"}, {"second samuel", "2 Samuel"}, {"2nd samuel", "2 Samuel"},
-		{"1 kings", "1 Kings"}, {"first kings", "1 Kings"}, {"1st kings", "1 Kings"},
-		{"2 kings", "2 Kings"}, {"second kings", "2 Kings"}, {"2nd kings", "2 Kings"},
-		{"1 peter", "1 Peter"}, {"first peter", "1 Peter"}, {"1st peter", "1 Peter"},
-		{"2 peter", "2 Peter"}, {"second peter", "2 Peter"}, {"2nd peter", "2 Peter"},
-		{"1 john", "1 John"}, {"first john", "1 John"}, {"1st john", "1 John"},
-		{"2 john", "2 John"}, {"second john", "2 John"}, {"2nd john", "2 John"},
-		{"3 john", "3 John"}, {"third john", "3 John"}, {"3rd john", "3 John"},
-		{"revelations", "Revelation"}, {"revelation", "Revelation"},
-		{"psalms", "Psalms"}, {"psalm", "Psalms"},
-		{"genesis", "Genesis"}, {"exodus", "Exodus"}, {"leviticus", "Leviticus"},
-		{"numbers", "Numbers"}, {"deuteronomy", "Deuteronomy"}, {"joshua", "Joshua"},
-		{"judges", "Judges"}, {"ruth", "Ruth"}, {"ezra", "Ezra"}, {"nehemiah", "Nehemiah"},
-		{"esther", "Esther"}, {"job", "Job"}, {"proverbs", "Proverbs"},
-		{"ecclesiastes", "Ecclesiastes"}, {"isaiah", "Isaiah"}, {"jeremiah", "Jeremiah"},
-		{"lamentations", "Lamentations"}, {"ezekiel", "Ezekiel"}, {"daniel", "Daniel"},
-		{"hosea", "Hosea"}, {"joel", "Joel"}, {"amos", "Amos"}, {"obadiah", "Obadiah"},
-		{"jonah", "Jonah"}, {"micah", "Micah"}, {"nahum", "Nahum"}, {"habakkuk", "Habakkuk"},
-		{"zephaniah", "Zephaniah"}, {"haggai", "Haggai"}, {"zechariah", "Zechariah"},
-		{"malachi", "Malachi"}, {"matthew", "Matthew"}, {"mark", "Mark"},
-		{"luke", "Luke"}, {"john", "John"}, {"jon", "John"}, {"acts", "Acts"},
-		{"romans", "Romans"}, {"roman", "Romans"},
-		{"galatians", "Galatians"}, {"ephesians", "Ephesians"},
-		{"philippians", "Philippians"}, {"phillipians", "Philippians"},
-		{"colossians", "Colossians"}, {"titus", "Titus"}, {"philemon", "Philemon"},
-		{"hebrews", "Hebrews"}, {"james", "James"}, {"jude", "Jude"}
-	};
+	static const BookAlias kAliases[] = {{"1 thessalonians", "1 Thessalonians"},
+					     {"first thessalonians", "1 Thessalonians"},
+					     {"1st thessalonians", "1 Thessalonians"},
+					     {"2 thessalonians", "2 Thessalonians"},
+					     {"second thessalonians", "2 Thessalonians"},
+					     {"2nd thessalonians", "2 Thessalonians"},
+					     {"1 chronicles", "1 Chronicles"},
+					     {"first chronicles", "1 Chronicles"},
+					     {"1st chronicles", "1 Chronicles"},
+					     {"2 chronicles", "2 Chronicles"},
+					     {"second chronicles", "2 Chronicles"},
+					     {"2nd chronicles", "2 Chronicles"},
+					     {"1 corinthians", "1 Corinthians"},
+					     {"first corinthians", "1 Corinthians"},
+					     {"1st corinthians", "1 Corinthians"},
+					     {"2 corinthians", "2 Corinthians"},
+					     {"second corinthians", "2 Corinthians"},
+					     {"2nd corinthians", "2 Corinthians"},
+					     {"song of solomon", "Song of Solomon"},
+					     {"song of songs", "Song of Solomon"},
+					     {"canticles", "Song of Solomon"},
+					     {"1 timothy", "1 Timothy"},
+					     {"first timothy", "1 Timothy"},
+					     {"1st timothy", "1 Timothy"},
+					     {"2 timothy", "2 Timothy"},
+					     {"second timothy", "2 Timothy"},
+					     {"2nd timothy", "2 Timothy"},
+					     {"1 samuel", "1 Samuel"},
+					     {"first samuel", "1 Samuel"},
+					     {"1st samuel", "1 Samuel"},
+					     {"2 samuel", "2 Samuel"},
+					     {"second samuel", "2 Samuel"},
+					     {"2nd samuel", "2 Samuel"},
+					     {"1 kings", "1 Kings"},
+					     {"first kings", "1 Kings"},
+					     {"1st kings", "1 Kings"},
+					     {"2 kings", "2 Kings"},
+					     {"second kings", "2 Kings"},
+					     {"2nd kings", "2 Kings"},
+					     {"1 peter", "1 Peter"},
+					     {"first peter", "1 Peter"},
+					     {"1st peter", "1 Peter"},
+					     {"2 peter", "2 Peter"},
+					     {"second peter", "2 Peter"},
+					     {"2nd peter", "2 Peter"},
+					     {"1 john", "1 John"},
+					     {"first john", "1 John"},
+					     {"1st john", "1 John"},
+					     {"2 john", "2 John"},
+					     {"second john", "2 John"},
+					     {"2nd john", "2 John"},
+					     {"3 john", "3 John"},
+					     {"third john", "3 John"},
+					     {"3rd john", "3 John"},
+					     {"revelations", "Revelation"},
+					     {"revelation", "Revelation"},
+					     {"psalms", "Psalms"},
+					     {"psalm", "Psalms"},
+					     {"genesis", "Genesis"},
+					     {"exodus", "Exodus"},
+					     {"leviticus", "Leviticus"},
+					     {"numbers", "Numbers"},
+					     {"deuteronomy", "Deuteronomy"},
+					     {"joshua", "Joshua"},
+					     {"judges", "Judges"},
+					     {"ruth", "Ruth"},
+					     {"ezra", "Ezra"},
+					     {"nehemiah", "Nehemiah"},
+					     {"esther", "Esther"},
+					     {"job", "Job"},
+					     {"proverbs", "Proverbs"},
+					     {"ecclesiastes", "Ecclesiastes"},
+					     {"isaiah", "Isaiah"},
+					     {"jeremiah", "Jeremiah"},
+					     {"lamentations", "Lamentations"},
+					     {"ezekiel", "Ezekiel"},
+					     {"daniel", "Daniel"},
+					     {"hosea", "Hosea"},
+					     {"joel", "Joel"},
+					     {"amos", "Amos"},
+					     {"obadiah", "Obadiah"},
+					     {"jonah", "Jonah"},
+					     {"micah", "Micah"},
+					     {"nahum", "Nahum"},
+					     {"habakkuk", "Habakkuk"},
+					     {"zephaniah", "Zephaniah"},
+					     {"haggai", "Haggai"},
+					     {"zechariah", "Zechariah"},
+					     {"malachi", "Malachi"},
+					     {"matthew", "Matthew"},
+					     {"mark", "Mark"},
+					     {"luke", "Luke"},
+					     {"john", "John"},
+					     {"jon", "John"},
+					     {"acts", "Acts"},
+					     {"romans", "Romans"},
+					     {"roman", "Romans"},
+					     {"galatians", "Galatians"},
+					     {"ephesians", "Ephesians"},
+					     {"philippians", "Philippians"},
+					     {"phillipians", "Philippians"},
+					     {"colossians", "Colossians"},
+					     {"titus", "Titus"},
+					     {"philemon", "Philemon"},
+					     {"hebrews", "Hebrews"},
+					     {"james", "James"},
+					     {"jude", "Jude"}};
 
 	for (const auto &b : kAliases) {
 		// Pattern 1: Standard [Book] [Chapter] [Verse]
-		QRegularExpression rx(QStringLiteral(
-			"\\b%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?(?:\\s*(?:[:,-]|and\\s+(?:verse|v)?|from\\s+(?:verse|v)?|starting\\s+(?:at\\s+)?(?:verse|v)?|at\\s+(?:verse|v)?|verse|verses|v)?\\s*(\\d+))?"
-		).arg(QRegularExpression::escape(QString::fromUtf8(b.alias))));
+		QRegularExpression rx(
+			QStringLiteral(
+				"\\b%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?(?:\\s*(?:[:,-]|and\\s+(?:verse|v)?|from\\s+(?:verse|v)?|starting\\s+(?:at\\s+)?(?:verse|v)?|at\\s+(?:verse|v)?|verse|verses|v)?\\s*(\\d+))?")
+				.arg(QRegularExpression::escape(QString::fromUtf8(b.alias))));
 
 		QRegularExpressionMatch m = rx.match(text);
 		if (m.hasMatch()) {
@@ -734,9 +809,10 @@ bool DetectionCore::detectScripture(const QString &rawTranscript, double streamT
 		}
 
 		// Pattern 2: Inverted order: Verse [V] of [Book] [Chapter]
-		QRegularExpression rxInv(QStringLiteral(
-			"\\b(?:verse|verses|v)\\s*(\\d+)\\s*(?:of|in|from)\\s*%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?"
-		).arg(QRegularExpression::escape(QString::fromUtf8(b.alias))));
+		QRegularExpression rxInv(
+			QStringLiteral(
+				"\\b(?:verse|verses|v)\\s*(\\d+)\\s*(?:of|in|from)\\s*%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?")
+				.arg(QRegularExpression::escape(QString::fromUtf8(b.alias))));
 
 		QRegularExpressionMatch mInv = rxInv.match(text);
 		if (mInv.hasMatch()) {
@@ -799,19 +875,15 @@ bool DetectionCore::detectBibleQuotes(const QString &normalizedText, double stre
 		 "In the beginning God created the heaven and the earth."},
 		{"be strong and courageous", "Joshua 1:9",
 		 "Be strong and of a good courage; be not afraid, neither be thou dismayed."},
-		{"the joy of the lord is your strength", "Nehemiah 8:10",
-		 "The joy of the LORD is your strength."},
-		{"by his stripes we are healed", "Isaiah 53:5",
-		 "With his stripes we are healed."},
-		{"if god be for us who can be against us", "Romans 8:31",
-		 "If God be for us, who can be against us?"},
+		{"the joy of the lord is your strength", "Nehemiah 8:10", "The joy of the LORD is your strength."},
+		{"by his stripes we are healed", "Isaiah 53:5", "With his stripes we are healed."},
+		{"if god be for us who can be against us", "Romans 8:31", "If God be for us, who can be against us?"},
 		{"charity suffereth long and is kind", "1 Corinthians 13:4",
 		 "Charity suffereth long, and is kind; charity envieth not; charity vaunteth not itself, is not puffed up,"},
 		{"if any of you lack wisdom let him ask of god", "James 1:5",
 		 "If any of you lack wisdom, let him ask of God, that giveth to all men liberally, and upbraideth not; and it shall be given him."},
 		{"i will lift up mine eyes unto the hills", "Psalms 121:1",
-		 "I will lift up mine eyes unto the hills, from whence cometh my help."}
-	};
+		 "I will lift up mine eyes unto the hills, from whence cometh my help."}};
 
 	for (const auto &q : kQuotes) {
 		if (normalizedText.contains(QString::fromUtf8(q.phrase))) {
@@ -830,7 +902,8 @@ bool DetectionCore::detectBibleQuotes(const QString &normalizedText, double stre
 				sugg.tentative = false;
 
 				if (m_debugLogging.load(std::memory_order_relaxed)) {
-					fprintf(stderr, "[LDWW Core] ==> SUGGEST QUOTE: %s (94%%)\n", ref.toUtf8().constData());
+					fprintf(stderr, "[LDWW Core] ==> SUGGEST QUOTE: %s (94%%)\n",
+						ref.toUtf8().constData());
 				}
 				emit suggestionDetected(sugg);
 				return true;
@@ -860,15 +933,13 @@ bool DetectionCore::detectLyrics(const QString &rawTranscript, double streamTime
 	if (transcriptWords.isEmpty())
 		return false;
 
-	static const QSet<QString> kStopWords = {
-		QStringLiteral("the"), QStringLiteral("and"), QStringLiteral("a"),
-		QStringLiteral("to"), QStringLiteral("in"), QStringLiteral("is"),
-		QStringLiteral("of"), QStringLiteral("that"), QStringLiteral("it"),
-		QStringLiteral("for"), QStringLiteral("on"), QStringLiteral("with"),
-		QStringLiteral("at"), QStringLiteral("by"), QStringLiteral("from"),
-		QStringLiteral("up"), QStringLiteral("an"), QStringLiteral("my"),
-		QStringLiteral("your"), QStringLiteral("we"), QStringLiteral("i")
-	};
+	static const QSet<QString> kStopWords = {QStringLiteral("the"),  QStringLiteral("and"),  QStringLiteral("a"),
+						 QStringLiteral("to"),   QStringLiteral("in"),   QStringLiteral("is"),
+						 QStringLiteral("of"),   QStringLiteral("that"), QStringLiteral("it"),
+						 QStringLiteral("for"),  QStringLiteral("on"),   QStringLiteral("with"),
+						 QStringLiteral("at"),   QStringLiteral("by"),   QStringLiteral("from"),
+						 QStringLiteral("up"),   QStringLiteral("an"),   QStringLiteral("my"),
+						 QStringLiteral("your"), QStringLiteral("we"),   QStringLiteral("i")};
 
 	struct Candidate {
 		QString songTitle;
@@ -920,7 +991,8 @@ bool DetectionCore::detectLyrics(const QString &rawTranscript, double streamTime
 			for (size_t i = 0; i < allSlides.size(); ++i) {
 				if (allSlides[i].sectionName != lastSec) {
 					lastSec = allSlides[i].sectionName;
-					if (std::find(candidateSlideIndices.begin(), candidateSlideIndices.end(), static_cast<int>(i)) == candidateSlideIndices.end()) {
+					if (std::find(candidateSlideIndices.begin(), candidateSlideIndices.end(),
+						      static_cast<int>(i)) == candidateSlideIndices.end()) {
 						candidateSlideIndices.push_back(static_cast<int>(i));
 					}
 				}
@@ -1021,7 +1093,8 @@ bool DetectionCore::detectLyrics(const QString &rawTranscript, double streamTime
 						}
 
 						// 3-word phrase match
-						QStringList lineWords = normLine.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+						QStringList lineWords =
+							normLine.split(QLatin1Char(' '), Qt::SkipEmptyParts);
 						if (lineWords.size() >= 3 && transcriptWords.size() >= 3) {
 							bool matched = false;
 							for (int li = 0; li <= lineWords.size() - 3; ++li) {
@@ -1031,7 +1104,9 @@ bool DetectionCore::detectLyrics(const QString &rawTranscript, double streamTime
 									continue;
 
 								QString trigram = QStringLiteral("%1 %2 %3")
-											  .arg(lineWords[li], lineWords[li + 1], lineWords[li + 2]);
+											  .arg(lineWords[li],
+											       lineWords[li + 1],
+											       lineWords[li + 2]);
 								if (text.contains(trigram)) {
 									Candidate c;
 									c.songTitle = song.title;
@@ -1061,7 +1136,8 @@ bool DetectionCore::detectLyrics(const QString &rawTranscript, double streamTime
 						}
 
 						if (totalSig >= 3 && matchCount >= 3) {
-							float ratio = static_cast<float>(matchCount) / static_cast<float>(totalSig);
+							float ratio = static_cast<float>(matchCount) /
+								      static_cast<float>(totalSig);
 							if (ratio >= 0.50f) {
 								int conf = 75 + static_cast<int>(ratio * 20.0f);
 								if (conf > best.confidence) {
@@ -1105,7 +1181,8 @@ bool DetectionCore::detectLyrics(const QString &rawTranscript, double streamTime
 
 			if (best.isNext) {
 				m_nextSlideConsecutiveMatches++;
-				if (m_nextSlideConsecutiveMatches >= 2 && m_autoAdvance.load(std::memory_order_relaxed)) {
+				if (m_nextSlideConsecutiveMatches >= 2 &&
+				    m_autoAdvance.load(std::memory_order_relaxed)) {
 					emit autoAdvanceRequested();
 				}
 			} else {

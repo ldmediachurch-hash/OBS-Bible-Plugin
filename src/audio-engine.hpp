@@ -61,7 +61,8 @@ public:
 
 signals:
 	void levelChanged(float level);
-	void suggestionDetected(Channel channel, const QString &reference, const QString &text, int confidence, bool tentative, bool isNextSlide);
+	void suggestionDetected(Channel channel, const QString &reference, const QString &text, int confidence,
+				bool tentative, bool isNextSlide);
 	void statusChanged(bool listening, const QString &sourceName);
 	void modelLoadedChanged(bool loaded, const QString &statusText);
 

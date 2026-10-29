@@ -41,7 +41,8 @@ public slots:
 private slots:
 	void audioSourceChanged(int index);
 	void refreshAudioSources();
-	void onSuggestionDetected(Channel ch, const QString &ref, const QString &text, int confidence, bool tentative, bool isNextSlide);
+	void onSuggestionDetected(Channel ch, const QString &ref, const QString &text, int confidence, bool tentative,
+				  bool isNextSlide);
 	void acceptSuggestion(bool goLive);
 	void dismissSuggestion();
 	void openAudioStatusMenu();

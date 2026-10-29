@@ -282,8 +282,7 @@ public:
 
 } // namespace
 
-LyricsDock::LyricsDock(QWidget *parent)
-	: QWidget(parent)
+LyricsDock::LyricsDock(QWidget *parent) : QWidget(parent)
 {
 	setMinimumWidth(300);
 	setupLayout();
@@ -498,7 +497,8 @@ void LyricsDock::setupLayout()
 	m_rightLayout->addLayout(ctlRow);
 
 	// Keyboard shortcut hints row
-	shortcutHintLabel = new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · B blank · Esc clear"), m_rightColumn);
+	shortcutHintLabel = new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · B blank · Esc clear"),
+				       m_rightColumn);
 	QFont hintFont = font();
 	hintFont.setPointSize(8);
 	shortcutHintLabel->setFont(hintFont);
@@ -594,9 +594,8 @@ void LyricsDock::openGearMenu()
 	connect(actBase, &QAction::triggered, this, []() {
 		AudioEngine::instance().core().loadModel(QStringLiteral("data/models/ggml-base.en-q5_1.bin"));
 	});
-	connect(actTiny, &QAction::triggered, this, []() {
-		AudioEngine::instance().core().loadModel(QStringLiteral("data/models/ggml-tiny.en.bin"));
-	});
+	connect(actTiny, &QAction::triggered, this,
+		[]() { AudioEngine::instance().core().loadModel(QStringLiteral("data/models/ggml-tiny.en.bin")); });
 	connect(actCustom, &QAction::triggered, this, &LyricsDock::selectCustomModel);
 
 	// Hardware backend info
@@ -612,17 +611,15 @@ void LyricsDock::openGearMenu()
 	auto *actFollow = menu->addAction(QStringLiteral("Follow mode (smart setlist)"));
 	actFollow->setCheckable(true);
 	actFollow->setChecked(AudioEngine::instance().core().followMode());
-	connect(actFollow, &QAction::toggled, this, [](bool checked) {
-		AudioEngine::instance().core().setFollowMode(checked);
-	});
+	connect(actFollow, &QAction::toggled, this,
+		[](bool checked) { AudioEngine::instance().core().setFollowMode(checked); });
 
 	// Auto-Advance Checkbox
 	auto *actAuto = menu->addAction(QStringLiteral("Auto-advance on speech match"));
 	actAuto->setCheckable(true);
 	actAuto->setChecked(AudioEngine::instance().core().autoAdvance());
-	connect(actAuto, &QAction::toggled, this, [](bool checked) {
-		AudioEngine::instance().core().setAutoAdvance(checked);
-	});
+	connect(actAuto, &QAction::toggled, this,
+		[](bool checked) { AudioEngine::instance().core().setAutoAdvance(checked); });
 
 	menu->exec(gearBtn->mapToGlobal(QPoint(0, gearBtn->height())));
 }
@@ -630,7 +627,7 @@ void LyricsDock::openGearMenu()
 void LyricsDock::selectCustomModel()
 {
 	QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Select Whisper Model"), QString(),
-						  QStringLiteral("GGML Models (*.bin);;All Files (*)"));
+						    QStringLiteral("GGML Models (*.bin);;All Files (*)"));
 	if (!path.isEmpty()) {
 		AudioEngine::instance().loadModelFile(path);
 	}
@@ -997,14 +994,13 @@ void LyricsDock::openSongsFolder()
 
 void LyricsDock::registerHotkeys()
 {
-	hkNext = obs_hotkey_register_frontend("ld_lyrics_next", "LD Lyrics: Next Slide",
-					      hotkeyCallback<kNext>, this);
-	hkPrev = obs_hotkey_register_frontend("ld_lyrics_prev", "LD Lyrics: Previous Slide",
-					      hotkeyCallback<kPrev>, this);
-	hkLive = obs_hotkey_register_frontend("ld_lyrics_live", "LD Lyrics: Show Slide Live",
-					      hotkeyCallback<kLive>, this);
-	hkClear = obs_hotkey_register_frontend("ld_lyrics_clear", "LD Lyrics: Clear Lyrics",
-					       hotkeyCallback<kClear>, this);
+	hkNext = obs_hotkey_register_frontend("ld_lyrics_next", "LD Lyrics: Next Slide", hotkeyCallback<kNext>, this);
+	hkPrev = obs_hotkey_register_frontend("ld_lyrics_prev", "LD Lyrics: Previous Slide", hotkeyCallback<kPrev>,
+					      this);
+	hkLive = obs_hotkey_register_frontend("ld_lyrics_live", "LD Lyrics: Show Slide Live", hotkeyCallback<kLive>,
+					      this);
+	hkClear = obs_hotkey_register_frontend("ld_lyrics_clear", "LD Lyrics: Clear Lyrics", hotkeyCallback<kClear>,
+					       this);
 }
 
 void LyricsDock::loadConfig() {}

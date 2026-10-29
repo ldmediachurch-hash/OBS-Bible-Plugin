@@ -24,8 +24,8 @@ if(ENABLE_FRONTEND_API)
 endif()
 
 if(ENABLE_QT)
-  find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui Svg)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg)
+  find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
   target_compile_options(
     ${CMAKE_PROJECT_NAME}
     PRIVATE $<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-quoted-include-in-framework-header -Wno-comma>
@@ -71,29 +71,38 @@ set(CMAKE_XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS ${_PREV_XCODE_TREAT_ERROR
 set(CMAKE_XCODE_ATTRIBUTE_GCC_WARN_64_TO_32_BIT_CONVERSION ${_PREV_XCODE_WARN_64_32})
 set(CMAKE_XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC ${_PREV_XCODE_ARC})
 
-foreach(_t whisper ggml ggml-base ggml-cpu ggml-metal)
+foreach(
+  _t
+  whisper
+  ggml
+  ggml-base
+  ggml-cpu
+  ggml-metal
+)
   if(TARGET ${_t})
-    set_target_properties(${_t} PROPERTIES
-      POSITION_INDEPENDENT_CODE ON
-      COMPILE_WARNING_AS_ERROR OFF
-      XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "NO"
-      XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS "NO"
-      XCODE_ATTRIBUTE_GCC_WARN_64_TO_32_BIT_CONVERSION "NO"
-      XCODE_ATTRIBUTE_WARNING_CFLAGS "-w"
+    set_target_properties(
+      ${_t}
+      PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        COMPILE_WARNING_AS_ERROR OFF
+        XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "NO"
+        XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS "NO"
+        XCODE_ATTRIBUTE_GCC_WARN_64_TO_32_BIT_CONVERSION "NO"
+        XCODE_ATTRIBUTE_WARNING_CFLAGS "-w"
     )
-    target_compile_options(${_t} PRIVATE
-      $<$<C_COMPILER_ID:MSVC>:/W0>
-      $<$<CXX_COMPILER_ID:MSVC>:/W0>
-      $<$<NOT:$<C_COMPILER_ID:MSVC>>:-w>
-      $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>
+    target_compile_options(
+      ${_t}
+      PRIVATE
+        $<$<C_COMPILER_ID:MSVC>:/W0>
+        $<$<CXX_COMPILER_ID:MSVC>:/W0>
+        $<$<NOT:$<C_COMPILER_ID:MSVC>>:-w>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>
     )
   endif()
 endforeach()
 
 if(TARGET ggml-metal)
-  set_target_properties(ggml-metal PROPERTIES
-    XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "NO"
-  )
+  set_target_properties(ggml-metal PROPERTIES XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "NO")
   target_compile_options(ggml-metal PRIVATE -fno-objc-arc -w)
 endif()
 
@@ -156,7 +165,8 @@ if(BUILD_TESTS)
 endif()
 
 if(BUILD_EVAL OR BUILD_TESTS)
-  add_executable(ldww-eval
+  add_executable(
+    ldww-eval
     tools/ldww-eval/main.cpp
     src/detection-core.cpp
     src/detection-core.hpp
@@ -171,6 +181,12 @@ if(BUILD_EVAL OR BUILD_TESTS)
     PROPERTIES AUTOMOC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
   )
   if(BUILD_TESTS)
-    add_test(NAME ldww-eval-synthetic COMMAND ldww-eval --wav ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval-synthetic/synthetic_eval.wav --truth ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval-synthetic/ground_truth.csv --songs-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/songs-samples)
+    add_test(
+      NAME ldww-eval-synthetic
+      COMMAND
+        ldww-eval --wav ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval-synthetic/synthetic_eval.wav --truth
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval-synthetic/ground_truth.csv --songs-dir
+        ${CMAKE_CURRENT_SOURCE_DIR}/data/songs-samples
+    )
   endif()
 endif()

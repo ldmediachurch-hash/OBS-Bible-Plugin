@@ -100,7 +100,8 @@ AudioEngine &AudioEngine::instance()
 AudioEngine::AudioEngine()
 {
 	connect(&m_core, &DetectionCore::suggestionDetected, this, [this](const SpeechSuggestion &sugg) {
-		emit suggestionDetected(sugg.channel, sugg.reference, sugg.text, sugg.confidence, sugg.tentative, sugg.isNextSlide);
+		emit suggestionDetected(sugg.channel, sugg.reference, sugg.text, sugg.confidence, sugg.tentative,
+					sugg.isNextSlide);
 	});
 
 	connect(&m_core, &DetectionCore::modelLoadedChanged, this, &AudioEngine::modelLoadedChanged);
@@ -200,7 +201,7 @@ void AudioEngine::loadModel()
 				QStringList args;
 				args << QStringLiteral("-L") << QStringLiteral("-s") << QStringLiteral("-o") << dest
 				     << QStringLiteral(
-					    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin");
+						"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin");
 				int code = QProcess::execute(QStringLiteral("curl"), args);
 				if (code == 0 && QFile::exists(dest)) {
 					loadModel();
@@ -309,8 +310,7 @@ void AudioEngine::processAudio(const float *samples, uint32_t frames, bool muted
 }
 
 // 5-bar Mini Signal Meter (Mockup fidelity)
-AudioMeterWidget::AudioMeterWidget(QWidget *parent)
-	: QWidget(parent)
+AudioMeterWidget::AudioMeterWidget(QWidget *parent) : QWidget(parent)
 {
 	setFixedSize(26, 14);
 	setToolTip(QStringLiteral("Audio Signal Meter"));
@@ -364,7 +364,7 @@ void AudioMeterWidget::paintEvent(QPaintEvent *)
 		} else if (i == 3) {
 			col = QColor(245, 158, 11); // Amber #F59E0B
 		} else {
-			col = QColor(239, 68, 68);  // Red #EF4444
+			col = QColor(239, 68, 68); // Red #EF4444
 		}
 
 		if (i >= activeBars) {

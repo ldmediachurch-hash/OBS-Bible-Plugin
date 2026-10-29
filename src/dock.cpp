@@ -46,13 +46,7 @@ the Free Software Foundation; either version 2 of the License, or
 
 namespace {
 
-enum Roles {
-	RoleBook = Qt::UserRole + 1,
-	RoleChapter,
-	RoleVerse,
-	RoleIsLive,
-	RoleIsNext
-};
+enum Roles { RoleBook = Qt::UserRole + 1, RoleChapter, RoleVerse, RoleIsLive, RoleIsNext };
 
 QString configPath()
 {
@@ -218,8 +212,7 @@ public:
 
 } // namespace
 
-ScriptureDock::ScriptureDock(QWidget *parent)
-	: QWidget(parent)
+ScriptureDock::ScriptureDock(QWidget *parent) : QWidget(parent)
 {
 	setMinimumWidth(300);
 	setupLayout();
@@ -388,7 +381,8 @@ void ScriptureDock::setupLayout()
 	m_rightLayout->addLayout(ctlRow);
 
 	// Shortcut hint
-	shortcutHintLabel = new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · Esc clear"), m_rightColumn);
+	shortcutHintLabel =
+		new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · Esc clear"), m_rightColumn);
 	QFont hintFont = font();
 	hintFont.setPointSize(8);
 	shortcutHintLabel->setFont(hintFont);
@@ -827,12 +821,11 @@ void ScriptureDock::openBiblesFolder()
 
 void ScriptureDock::registerHotkeys()
 {
-	hkNext = obs_hotkey_register_frontend("ld_bible_next", "LD Scripture: Next Verse",
-					      hotkeyCallback<kNext>, this);
-	hkPrev = obs_hotkey_register_frontend("ld_bible_prev", "LD Scripture: Previous Verse",
-					      hotkeyCallback<kPrev>, this);
-	hkLive = obs_hotkey_register_frontend("ld_bible_live", "LD Scripture: Show Verse Live",
-					      hotkeyCallback<kLive>, this);
+	hkNext = obs_hotkey_register_frontend("ld_bible_next", "LD Scripture: Next Verse", hotkeyCallback<kNext>, this);
+	hkPrev = obs_hotkey_register_frontend("ld_bible_prev", "LD Scripture: Previous Verse", hotkeyCallback<kPrev>,
+					      this);
+	hkLive = obs_hotkey_register_frontend("ld_bible_live", "LD Scripture: Show Verse Live", hotkeyCallback<kLive>,
+					      this);
 	hkClear = obs_hotkey_register_frontend("ld_bible_clear", "LD Scripture: Clear Scripture",
 					       hotkeyCallback<kClear>, this);
 }

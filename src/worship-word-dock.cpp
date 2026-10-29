@@ -74,8 +74,7 @@ private:
 
 } // namespace
 
-WorshipWordDock::WorshipWordDock(QWidget *parent)
-	: QWidget(parent)
+WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 {
 	auto *root = new QVBoxLayout(this);
 	root->setContentsMargins(6, 6, 6, 6);
@@ -329,7 +328,8 @@ void WorshipWordDock::updateTabStyles()
 	m_wordBtn->setStyleSheet(idx == 1 ? activeStyle : inactiveStyle);
 }
 
-void WorshipWordDock::onSuggestionDetected(Channel ch, const QString &ref, const QString &text, int confidence, bool tentative, bool isNextSlide)
+void WorshipWordDock::onSuggestionDetected(Channel ch, const QString &ref, const QString &text, int confidence,
+					   bool tentative, bool isNextSlide)
 {
 	m_suggestedChannel = ch;
 	m_suggestedRef = ref;
@@ -338,7 +338,8 @@ void WorshipWordDock::onSuggestionDetected(Channel ch, const QString &ref, const
 	m_isTentative = tentative;
 	m_isNext = isNextSlide;
 
-	QString kicker = tentative ? QStringLiteral("TENTATIVE · %1%").arg(confidence) : QStringLiteral("HEARD · %1%").arg(confidence);
+	QString kicker = tentative ? QStringLiteral("TENTATIVE · %1%").arg(confidence)
+				   : QStringLiteral("HEARD · %1%").arg(confidence);
 	if (isNextSlide) {
 		kicker = QStringLiteral("NEXT SLIDE · %1%").arg(confidence);
 	}
