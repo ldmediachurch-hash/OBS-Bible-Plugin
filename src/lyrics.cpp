@@ -406,7 +406,8 @@ static Song parseJsonObjectToSong(const QJsonObject &obj)
 					if (so.contains(QLatin1String(lk))) {
 						if (so.value(QLatin1String(lk)).isArray()) {
 							QStringList lines;
-							for (const QJsonValue lv : so.value(QLatin1String(lk)).toArray()) {
+							for (const QJsonValue lv :
+							     so.value(QLatin1String(lk)).toArray()) {
 								if (lv.isString()) {
 									lines.push_back(lv.toString().trimmed());
 								} else if (lv.isArray()) {
