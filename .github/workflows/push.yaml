@@ -106,6 +106,7 @@ jobs:
         if: fromJSON(steps.check.outputs.validTag)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           tag="${{ steps.check.outputs.version }}"
