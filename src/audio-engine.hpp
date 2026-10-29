@@ -23,6 +23,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 struct whisper_context;

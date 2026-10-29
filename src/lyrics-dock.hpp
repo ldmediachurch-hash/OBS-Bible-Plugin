@@ -62,7 +62,6 @@ private slots:
 
 private:
 	void refreshSongList(const QString &filter = QString());
-	bool openSong(const QString &titleOrPath, bool fromList = false);
 	void rebuildSlides();
 	void rebuildSectionButtons();
 	void updatePreview();

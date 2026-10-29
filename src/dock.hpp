@@ -56,7 +56,6 @@ private slots:
 
 private:
 	void refreshTranslations(const QString &primaryAbbrev, const QString &secondaryAbbrev);
-	bool showQuery(const QString &query, bool fromList);
 	void setChapter(int book, int chapter, int selectVerse);
 	VerseRef currentVerse() const;
 	void updatePreview();

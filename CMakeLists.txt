@@ -48,27 +48,42 @@ endif()
 FetchContent_Declare(
   whisper
   GIT_REPOSITORY https://github.com/ggerganov/whisper.cpp.git
-  GIT_TAG v1.7.4
+  GIT_TAG v1.7.6
   GIT_SHALLOW TRUE
   SYSTEM
 )
 set(_PREV_WARNING_AS_ERROR ${CMAKE_COMPILE_WARNING_AS_ERROR})
+set(_PREV_XCODE_TREAT_ERRORS ${CMAKE_XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS})
+set(_PREV_XCODE_WARN_64_32 ${CMAKE_XCODE_ATTRIBUTE_GCC_WARN_64_TO_32_BIT_CONVERSION})
 set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
+set(CMAKE_XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS NO)
+set(CMAKE_XCODE_ATTRIBUTE_GCC_WARN_64_TO_32_BIT_CONVERSION NO)
+
 FetchContent_MakeAvailable(whisper)
+
 set(CMAKE_COMPILE_WARNING_AS_ERROR ${_PREV_WARNING_AS_ERROR})
+set(CMAKE_XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS ${_PREV_XCODE_TREAT_ERRORS})
+set(CMAKE_XCODE_ATTRIBUTE_GCC_WARN_64_TO_32_BIT_CONVERSION ${_PREV_XCODE_WARN_64_32})
+
+foreach(_t whisper ggml ggml-base ggml-cpu ggml-metal)
+  if(TARGET ${_t})
+    set_target_properties(${_t} PROPERTIES
+      COMPILE_WARNING_AS_ERROR OFF
+      XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS "NO"
+      XCODE_ATTRIBUTE_GCC_WARN_64_TO_32_BIT_CONVERSION "NO"
+      XCODE_ATTRIBUTE_WARNING_CFLAGS "-w"
+    )
+    target_compile_options(${_t} PRIVATE
+      $<$<C_COMPILER_ID:MSVC>:/W0>
+      $<$<CXX_COMPILER_ID:MSVC>:/W0>
+      $<$<NOT:$<C_COMPILER_ID:MSVC>>:-w>
+      $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>
+    )
+  endif()
+endforeach()
 
 if(TARGET whisper)
-  set_target_properties(whisper PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE whisper)
-endif()
-if(TARGET ggml)
-  set_target_properties(ggml PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-endif()
-if(TARGET ggml-base)
-  set_target_properties(ggml-base PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-endif()
-if(TARGET ggml-cpu)
-  set_target_properties(ggml-cpu PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
 endif()
 
 set(MODEL_URL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin")

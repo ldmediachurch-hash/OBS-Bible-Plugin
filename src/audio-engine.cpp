@@ -119,10 +119,12 @@ QString normalizeSpokenText(QString s)
 	}
 
 	// Composite numbers e.g. "20 8" -> "28"
-	s.replace(QRegularExpression(QStringLiteral("\\b(\\d0) (\\d)\\b")),
-		  [](const QRegularExpressionMatch &m) {
-			  return QString::number(m.captured(1).toInt() + m.captured(2).toInt());
-		  });
+	static const int tens[] = {20, 30, 40, 50, 60, 70, 80, 90};
+	for (int t : tens) {
+		for (int u = 1; u <= 9; ++u) {
+			s.replace(QStringLiteral("%1 %2").arg(t).arg(u), QString::number(t + u));
+		}
+	}
 
 	return s.simplified();
 }
@@ -569,8 +571,8 @@ void AudioEngine::detectLyrics(const QString &rawTranscript)
 		}
 
 		for (const auto &sec : song.sections) {
-			for (const auto &slide : sec.slides) {
-				for (const auto &line : slide.lines) {
+			for (const auto &slide : sec.rawSlides) {
+				for (const auto &line : slide) {
 					QString normLine = normalizeSpokenText(line);
 					if (normLine.length() >= 12 && text.contains(normLine)) {
 						QString ref = QStringLiteral("%1 · %2")
