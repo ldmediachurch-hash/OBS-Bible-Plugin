@@ -83,7 +83,6 @@ const char kNext[] = "next";
 const char kPrev[] = "prev";
 const char kLive[] = "goLive";
 const char kClear[] = "clearLive";
-const char kBlank[] = "toggleBlank";
 
 // Delegate for Slide Cards (Mockup fidelity)
 class SlideCardDelegate : public QStyledItemDelegate {
