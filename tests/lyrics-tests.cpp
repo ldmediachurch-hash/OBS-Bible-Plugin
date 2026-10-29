@@ -181,6 +181,98 @@ static void testCrlfAndBom()
 	ASSERT_TRUE(s.sections[0].rawSlides[1][0] == QStringLiteral("Line 3"), "Line 3 CRLF");
 }
 
+static void testOpenSongXml()
+{
+	const QString xml = QStringLiteral("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+					   "<song>\n"
+					   "  <title>Way Maker</title>\n"
+					   "  <author>Sinach</author>\n"
+					   "  <ccli>7115744</ccli>\n"
+					   "  <copyright>2016 Sinach</copyright>\n"
+					   "  <presentation>V1 C</presentation>\n"
+					   "  <lyrics>\n"
+					   "[V1]\n"
+					   ".G            C\n"
+					   "You are here moving in our midst\n"
+					   ".             D\n"
+					   "I worship You, I worship You\n\n"
+					   "[C]\n"
+					   ".G            C\n"
+					   "Way maker, miracle worker\n"
+					   "Promise keeper\n"
+					   "  </lyrics>\n"
+					   "</song>");
+	QString err;
+	const Song s = parseSongXml(xml, &err);
+	ASSERT_TRUE(err.isEmpty(), "OpenSong XML parsed with no error");
+	ASSERT_TRUE(s.title == QStringLiteral("Way Maker"), "OpenSong title");
+	ASSERT_TRUE(s.author == QStringLiteral("Sinach"), "OpenSong author");
+	ASSERT_TRUE(s.ccli == QStringLiteral("7115744"), "OpenSong ccli");
+	ASSERT_TRUE(s.copyright == QStringLiteral("2016 Sinach"), "OpenSong copyright");
+	ASSERT_TRUE(s.order == QStringLiteral("V1 C"), "OpenSong order");
+	ASSERT_TRUE(s.sections.size() == 2, "OpenSong sections");
+	ASSERT_TRUE(s.sections[0].rawSlides.size() == 1, "V1 slide count");
+	ASSERT_TRUE(s.sections[0].rawSlides[0].size() == 2, "V1 has 2 lines (chords stripped)");
+	ASSERT_TRUE(s.sections[0].rawSlides[0][0] == QStringLiteral("You are here moving in our midst"), "Line 1");
+	ASSERT_TRUE(s.sections[0].rawSlides[0][1] == QStringLiteral("I worship You, I worship You"), "Line 2");
+}
+
+static void testSongJson()
+{
+	const QByteArray json = QByteArrayLiteral(
+		"{\n"
+		"  \"title\": \"10,000 Reasons\",\n"
+		"  \"author\": \"Matt Redman\",\n"
+		"  \"ccli\": \"6016351\",\n"
+		"  \"copyright\": \"2011 Thankyou Music\",\n"
+		"  \"order\": \"C V1 C\",\n"
+		"  \"sections\": [\n"
+		"    {\n"
+		"      \"name\": \"Chorus\",\n"
+		"      \"lines\": [\"Bless the Lord, O my soul\", \"O my soul\", \"Worship His holy name\"]\n"
+		"    },\n"
+		"    {\n"
+		"      \"name\": \"Verse 1\",\n"
+		"      \"lines\": [\"The sun comes up, it's a new day dawning\", \"It's time to sing Your song again\"]\n"
+		"    }\n"
+		"  ]\n"
+		"}");
+	QString err;
+	const std::vector<Song> list = parseSongJson(json, &err);
+	ASSERT_TRUE(err.isEmpty(), "JSON parsed with no error");
+	ASSERT_TRUE(list.size() == 1, "1 song in JSON object");
+	const Song &s = list.front();
+	ASSERT_TRUE(s.title == QStringLiteral("10,000 Reasons"), "JSON title");
+	ASSERT_TRUE(s.author == QStringLiteral("Matt Redman"), "JSON author");
+	ASSERT_TRUE(s.ccli == QStringLiteral("6016351"), "JSON ccli");
+	ASSERT_TRUE(s.sections.size() == 2, "JSON sections count");
+	ASSERT_TRUE(s.sections[0].name == QStringLiteral("Chorus"), "Section 1 name");
+	ASSERT_TRUE(s.sections[0].rawSlides[0].size() == 3, "Chorus line count");
+	ASSERT_TRUE(s.sections[1].name == QStringLiteral("Verse 1"), "Section 2 name");
+}
+
+static void testSongJsonArray()
+{
+	const QByteArray json = QByteArrayLiteral("[\n"
+						  "  {\n"
+						  "    \"title\": \"Song A\",\n"
+						  "    \"author\": \"Author A\",\n"
+						  "    \"lyrics\": \"[Verse 1]\\nLine 1\\nLine 2\"\n"
+						  "  },\n"
+						  "  {\n"
+						  "    \"title\": \"Song B\",\n"
+						  "    \"author\": \"Author B\",\n"
+						  "    \"lyrics\": \"[Chorus]\\nChorus line 1\"\n"
+						  "  }\n"
+						  "]");
+	QString err;
+	const std::vector<Song> list = parseSongJson(json, &err);
+	ASSERT_TRUE(err.isEmpty(), "JSON array parsed with no error");
+	ASSERT_TRUE(list.size() == 2, "2 songs parsed from JSON array");
+	ASSERT_TRUE(list[0].title == QStringLiteral("Song A"), "Song A title");
+	ASSERT_TRUE(list[1].title == QStringLiteral("Song B"), "Song B title");
+}
+
 int main(int argc, char *argv[])
 {
 	QCoreApplication app(argc, argv);
@@ -192,6 +284,9 @@ int main(int argc, char *argv[])
 	testSplittingFiveLineSlide();
 	testOrderExpansion();
 	testOpenLyricsXml();
+	testOpenSongXml();
+	testSongJson();
+	testSongJsonArray();
 	testCrlfAndBom();
 
 	std::cout << "All lyrics tests passed successfully!" << std::endl;

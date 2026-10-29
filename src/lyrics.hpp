@@ -63,6 +63,8 @@ struct SongSlide {
 QString sectionToShortCode(const QString &name);
 Song parseNativeSong(const QString &content, const QString &fallbackTitle = QString());
 Song parseOpenLyricsXml(const QString &xmlContent, QString *error = nullptr);
+Song parseSongXml(const QString &xmlContent, QString *error = nullptr);
+std::vector<Song> parseSongJson(const QByteArray &jsonData, QString *error = nullptr);
 QString serializeNativeSong(const Song &song);
 std::vector<SongSlide> generateSlides(const Song &song, int linesPerSlide);
 
@@ -77,6 +79,7 @@ public:
 	std::vector<Song> search(const QString &query) const;
 
 	bool importSongFile(const QString &srcPath, QString *importedTitle, QString *error);
+	int importSongFileCount(const QString &srcPath, QString *firstImportedTitle, QString *error);
 	bool saveSong(const Song &song, const QString &suggestedFileName, QString *savedPath, QString *error);
 	bool removeSong(const QString &titleOrPath, QString *error);
 	QString userDir() const { return userPath; }

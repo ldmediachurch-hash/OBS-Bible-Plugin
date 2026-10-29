@@ -213,6 +213,7 @@ public:
 		QFontMetrics fmAuthor(authorFont);
 
 		const int margin = 8;
+		const int titleW = static_cast<int>(r.width() * 0.65) - margin;
 		int authorW = 0;
 		if (!author.isEmpty()) {
 			authorW = std::min(fmAuthor.horizontalAdvance(author) + 4, static_cast<int>(r.width() * 0.35));
@@ -220,76 +221,85 @@ public:
 		int titleW = r.width() - margin * 2 - (authorW > 0 ? (authorW + 8) : 0);
 		QString elidedTitle = fmTitle.elidedText(title, Qt::ElideRight, titleW);
 		QRect titleRect(r.left() + margin, r.top(), titleW, r.height());
+		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
 		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, elidedTitle);
 
-		if (authorW > 0) {
-			p->setFont(authorFont);
+		if (!author.isEmpty()) {
+			QFont authorFont = option.font;
+			authorFont.setPointSize(authorFont.pointSize() - 1);
+			if (authorW > 0) {
+				p->setFont(authorFont);
+				p->setPen(QColor(130, 137, 150));
+				const int authorX = r.left() + static_cast<int>(r.width() * 0.65);
+				const int authorW = static_cast<int>(r.width() * 0.35) - margin;
+				QRect authorRect(authorX, r.top(), authorW, r.height());
+				p->drawText(authorRect, Qt::AlignRight | Qt::AlignVCenter, author);
+				QString elidedAuthor = fmAuthor.elidedText(author, Qt::ElideRight, authorW);
+				QRect authorRect(r.right() - margin - authorW, r.top(), authorW, r.height());
+				p->drawText(authorRect, Qt::AlignRight | Qt::AlignVCenter, elidedAuthor);
+			}
+
+			p->restore();
+		}
+
+		QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
+		{
+			return QSize(option.rect.width(), 32);
+		}
+	};
+
+	// Delegate for Setlist with numbered rows
+	class SetlistDelegate : public QStyledItemDelegate {
+	public:
+		explicit SetlistDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
+
+		void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+		{
+			p->save();
+			p->setRenderHint(QPainter::Antialiasing, true);
+
+			QRect r = option.rect.adjusted(2, 2, -2, -2);
+			bool isSelected = option.state & QStyle::State_Selected;
+
+			if (isSelected) {
+				QPainterPath path;
+				path.addRoundedRect(r, 4, 4);
+				p->fillPath(path, QColor(255, 255, 255, 16));
+				p->fillRect(QRect(r.left(), r.top() + 4, 2, r.height() - 8), Qt::white);
+			}
+
+			QString numStr = QString::number(index.row() + 1);
+			QString title = index.data(Qt::DisplayRole).toString();
+
+			// Row number in muted gray
+			QFont numFont = option.font;
+			numFont.setPointSize(numFont.pointSize() - 1);
+			p->setFont(numFont);
 			p->setPen(QColor(130, 137, 150));
-			QString elidedAuthor = fmAuthor.elidedText(author, Qt::ElideRight, authorW);
-			QRect authorRect(r.right() - margin - authorW, r.top(), authorW, r.height());
-			p->drawText(authorRect, Qt::AlignRight | Qt::AlignVCenter, elidedAuthor);
+			QRect numRect(r.left() + 6, r.top(), 22, r.height());
+			p->drawText(numRect, Qt::AlignLeft | Qt::AlignVCenter, numStr);
+
+			// Song title
+			QFont titleFont = option.font;
+			titleFont.setBold(isSelected);
+			p->setFont(titleFont);
+			p->setPen(isSelected ? Qt::white : QColor(220, 224, 230));
+			QRect titleRect(r.left() + 32, r.top(), r.width() - 38, r.height());
+			p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
+
+			p->restore();
 		}
 
-		p->restore();
-	}
-
-	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
-	{
-		return QSize(option.rect.width(), 32);
-	}
-};
-
-// Delegate for Setlist with numbered rows
-class SetlistDelegate : public QStyledItemDelegate {
-public:
-	explicit SetlistDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
-
-	void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
-	{
-		p->save();
-		p->setRenderHint(QPainter::Antialiasing, true);
-
-		QRect r = option.rect.adjusted(2, 2, -2, -2);
-		bool isSelected = option.state & QStyle::State_Selected;
-
-		if (isSelected) {
-			QPainterPath path;
-			path.addRoundedRect(r, 4, 4);
-			p->fillPath(path, QColor(255, 255, 255, 16));
-			p->fillRect(QRect(r.left(), r.top() + 4, 2, r.height() - 8), Qt::white);
+		QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
+		{
+			return QSize(option.rect.width(), 32);
 		}
-
-		QString numStr = QString::number(index.row() + 1);
-		QString title = index.data(Qt::DisplayRole).toString();
-
-		// Row number in muted gray
-		QFont numFont = option.font;
-		numFont.setPointSize(numFont.pointSize() - 1);
-		p->setFont(numFont);
-		p->setPen(QColor(130, 137, 150));
-		QRect numRect(r.left() + 6, r.top(), 22, r.height());
-		p->drawText(numRect, Qt::AlignLeft | Qt::AlignVCenter, numStr);
-
-		// Song title
-		QFont titleFont = option.font;
-		titleFont.setBold(isSelected);
-		p->setFont(titleFont);
-		p->setPen(isSelected ? Qt::white : QColor(220, 224, 230));
-		QRect titleRect(r.left() + 32, r.top(), r.width() - 38, r.height());
-		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
-
-		p->restore();
-	}
-
-	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
-	{
-		return QSize(option.rect.width(), 32);
-	}
-};
+	};
 
 } // namespace
 
-LyricsDock::LyricsDock(QWidget *parent) : QWidget(parent)
+LyricsDock::LyricsDock(QWidget *parent)
+	: QWidget(parent)
 {
 	setMinimumWidth(300);
 	setupLayout();
@@ -347,13 +357,14 @@ void LyricsDock::setupLayout()
 	contentLayout->setContentsMargins(0, 0, 0, 0);
 	contentLayout->setSpacing(8);
 
-	// --- Library Section ---
-	auto *libHeaderRow = new QHBoxLayout();
-	libraryHeaderLabel = new QLabel(QStringLiteral("LIBRARY · 0"), scrollContent);
 	QFont hFont = font();
 	hFont.setPointSize(8);
 	hFont.setBold(true);
 	hFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
+
+	// --- Library Section ---
+	auto *libHeaderRow = new QHBoxLayout();
+	libraryHeaderLabel = new QLabel(QStringLiteral("LIBRARY · 0"), scrollContent);
 	libraryHeaderLabel->setFont(hFont);
 	libraryHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
 	libHeaderRow->addWidget(libraryHeaderLabel, 1);
@@ -362,13 +373,15 @@ void LyricsDock::setupLayout()
 	importBtn->setText(QStringLiteral("Import ▾"));
 	importBtn->setPopupMode(QToolButton::InstantPopup);
 	auto *importMenu = new QMenu(importBtn);
-	importMenu->addAction(QStringLiteral("Import Songs (OpenLyrics/Text)…"), this, &LyricsDock::importSongs);
+	importMenu->addAction(QStringLiteral("Import Songs (OpenLyrics/OpenSong/JSON/Text)…"), this,
+			      &LyricsDock::importSongs);
 	importMenu->addAction(QStringLiteral("New Song…"), this, &LyricsDock::newSongDialog);
 	importMenu->addAction(QStringLiteral("Edit Current Song…"), this, &LyricsDock::editSongDialog);
 	importMenu->addSeparator();
 	importMenu->addAction(QStringLiteral("Open Songs Folder"), this, &LyricsDock::openSongsFolder);
 	importBtn->setMenu(importMenu);
 	libHeaderRow->addWidget(importBtn);
+
 	contentLayout->addLayout(libHeaderRow);
 
 	songList = new QListWidget(scrollContent);
@@ -523,6 +536,11 @@ void LyricsDock::setupLayout()
 	connect(songList, &QListWidget::itemDoubleClicked, this, &LyricsDock::songSelected);
 	connect(slideList, &QListWidget::currentRowChanged, this, &LyricsDock::slideSelectionChanged);
 	connect(setlist, &QListWidget::itemDoubleClicked, this, &LyricsDock::openListItem);
+}
+
+void LyricsDock::resizeEvent(QResizeEvent *event)
+{
+	QWidget::resizeEvent(event);
 }
 
 void LyricsDock::keyPressEvent(QKeyEvent *event)
@@ -971,9 +989,236 @@ bool LyricsDock::openListIndex(int index, bool fromEnd)
 	return true;
 }
 
-void LyricsDock::newSongDialog() {}
-void LyricsDock::editSongDialog() {}
-void LyricsDock::importSongs() {}
+void LyricsDock::newSongDialog()
+{
+	QDialog dlg(this);
+	dlg.setWindowTitle(QStringLiteral("New Song"));
+	dlg.setMinimumWidth(450);
+
+	auto *layout = new QVBoxLayout(&dlg);
+	layout->setSpacing(8);
+
+	auto *form = new QFormLayout();
+	auto *titleEdit = new QLineEdit(&dlg);
+	titleEdit->setPlaceholderText(QStringLiteral("e.g. Amazing Grace"));
+	form->addRow(QStringLiteral("Title *:"), titleEdit);
+
+	auto *authorEdit = new QLineEdit(&dlg);
+	authorEdit->setPlaceholderText(QStringLiteral("e.g. John Newton"));
+	form->addRow(QStringLiteral("Author:"), authorEdit);
+
+	auto *ccliEdit = new QLineEdit(&dlg);
+	ccliEdit->setPlaceholderText(QStringLiteral("Optional CCLI #"));
+	form->addRow(QStringLiteral("CCLI #:"), ccliEdit);
+
+	auto *copyrightEdit = new QLineEdit(&dlg);
+	copyrightEdit->setPlaceholderText(QStringLiteral("Optional copyright info"));
+	form->addRow(QStringLiteral("Copyright:"), copyrightEdit);
+
+	auto *orderEdit = new QLineEdit(&dlg);
+	orderEdit->setPlaceholderText(QStringLiteral("e.g. V1 C V2 C B C"));
+	form->addRow(QStringLiteral("Verse Order:"), orderEdit);
+
+	layout->addLayout(form);
+
+	auto *lyricsLabel = new QLabel(QStringLiteral("Lyrics & Sections:"), &dlg);
+	layout->addWidget(lyricsLabel);
+
+	auto *lyricsEdit = new QPlainTextEdit(&dlg);
+	lyricsEdit->setPlaceholderText(QStringLiteral("[Verse 1]\n"
+						      "Amazing grace! How sweet the sound\n"
+						      "That saved a wretch like me!\n\n"
+						      "[Chorus]\n"
+						      "Praise God, praise God\n"
+						      "Praise God, praise God\n\n"
+						      "[Verse 2]\n"
+						      "'Twas grace that taught my heart to fear\n"
+						      "And grace my fears relieved"));
+	lyricsEdit->setMinimumHeight(200);
+	layout->addWidget(lyricsEdit);
+
+	auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
+	connect(btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+	connect(btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+	layout->addWidget(btnBox);
+
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+
+	const QString title = titleEdit->text().trimmed();
+	if (title.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Missing Title"),
+				     QStringLiteral("Please enter a song title."));
+		return;
+	}
+
+	Song song = parseNativeSong(lyricsEdit->toPlainText(), title);
+	song.title = title;
+	song.author = authorEdit->text().trimmed();
+	song.ccli = ccliEdit->text().trimmed();
+	song.copyright = copyrightEdit->text().trimmed();
+	song.order = orderEdit->text().trimmed();
+
+	QString savedPath, err;
+	if (!SongLibrary::instance().saveSong(song, title, &savedPath, &err)) {
+		QMessageBox::critical(this, QStringLiteral("Error Saving Song"),
+				      err.isEmpty() ? QStringLiteral("Could not save song to disk.") : err);
+		return;
+	}
+
+	refreshSongList(searchEdit->text().trimmed());
+	openSong(title, false);
+}
+
+void LyricsDock::editSongDialog()
+{
+	if (!currentSong.isValid()) {
+		QMessageBox::information(this, QStringLiteral("No Song Selected"),
+					 QStringLiteral("Please select a song from the library to edit."));
+		return;
+	}
+
+	QDialog dlg(this);
+	dlg.setWindowTitle(QStringLiteral("Edit Song - %1").arg(currentSong.title));
+	dlg.setMinimumWidth(450);
+
+	auto *layout = new QVBoxLayout(&dlg);
+	layout->setSpacing(8);
+
+	auto *form = new QFormLayout();
+	auto *titleEdit = new QLineEdit(&dlg);
+	titleEdit->setText(currentSong.title);
+	form->addRow(QStringLiteral("Title *:"), titleEdit);
+
+	auto *authorEdit = new QLineEdit(&dlg);
+	authorEdit->setText(currentSong.author);
+	form->addRow(QStringLiteral("Author:"), authorEdit);
+
+	auto *ccliEdit = new QLineEdit(&dlg);
+	ccliEdit->setText(currentSong.ccli);
+	form->addRow(QStringLiteral("CCLI #:"), ccliEdit);
+
+	auto *copyrightEdit = new QLineEdit(&dlg);
+	copyrightEdit->setText(currentSong.copyright);
+	form->addRow(QStringLiteral("Copyright:"), copyrightEdit);
+
+	auto *orderEdit = new QLineEdit(&dlg);
+	orderEdit->setText(currentSong.order);
+	form->addRow(QStringLiteral("Verse Order:"), orderEdit);
+
+	layout->addLayout(form);
+
+	auto *lyricsLabel = new QLabel(QStringLiteral("Lyrics & Sections:"), &dlg);
+	layout->addWidget(lyricsLabel);
+
+	auto *lyricsEdit = new QPlainTextEdit(&dlg);
+	QString outLyrics;
+	QTextStream ts(&outLyrics);
+	for (size_t si = 0; si < currentSong.sections.size(); si++) {
+		const auto &sec = currentSong.sections[si];
+		if (!sec.name.isEmpty())
+			ts << "[" << sec.name << "]\n";
+		for (size_t ri = 0; ri < sec.rawSlides.size(); ri++) {
+			for (const QString &line : sec.rawSlides[ri])
+				ts << line << "\n";
+			if (ri + 1 < sec.rawSlides.size())
+				ts << "\n";
+		}
+		if (si + 1 < currentSong.sections.size())
+			ts << "\n";
+	}
+	lyricsEdit->setPlainText(outLyrics.trimmed());
+	lyricsEdit->setMinimumHeight(200);
+	layout->addWidget(lyricsEdit);
+
+	auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
+	connect(btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+	connect(btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+	layout->addWidget(btnBox);
+
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+
+	const QString newTitle = titleEdit->text().trimmed();
+	if (newTitle.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Missing Title"),
+				     QStringLiteral("Please enter a song title."));
+		return;
+	}
+
+	if (newTitle != currentSong.title && !currentSong.builtIn && !currentSong.filePath.isEmpty()) {
+		QFile::remove(currentSong.filePath);
+	}
+
+	Song updated = parseNativeSong(lyricsEdit->toPlainText(), newTitle);
+	updated.title = newTitle;
+	updated.author = authorEdit->text().trimmed();
+	updated.ccli = ccliEdit->text().trimmed();
+	updated.copyright = copyrightEdit->text().trimmed();
+	updated.order = orderEdit->text().trimmed();
+
+	QString savedPath, err;
+	if (!SongLibrary::instance().saveSong(updated, newTitle, &savedPath, &err)) {
+		QMessageBox::critical(this, QStringLiteral("Error Saving Song"),
+				      err.isEmpty() ? QStringLiteral("Could not save song updates to disk.") : err);
+		return;
+	}
+
+	refreshSongList(searchEdit->text().trimmed());
+	openSong(newTitle, false);
+}
+
+void LyricsDock::importSongs()
+{
+	const QStringList files =
+		QFileDialog::getOpenFileNames(this, QStringLiteral("Import Songs"), QString(),
+					      QStringLiteral("All Supported Formats (*.xml *.json *.txt *.ccli);;"
+							     "OpenLyrics / OpenSong XML (*.xml);;"
+							     "JSON Songs (*.json);;"
+							     "Text Songs (*.txt);;"
+							     "All Files (*.*)"));
+	if (files.isEmpty())
+		return;
+
+	int totalImported = 0;
+	int failCount = 0;
+	QString firstTitle;
+	QStringList errorMessages;
+
+	for (const QString &file : files) {
+		QString title;
+		QString err;
+		int count = SongLibrary::instance().importSongFileCount(file, &title, &err);
+		if (count > 0) {
+			totalImported += count;
+			if (firstTitle.isEmpty())
+				firstTitle = title;
+		} else {
+			failCount++;
+			errorMessages.push_back(QStringLiteral("%1: %2").arg(
+				QFileInfo(file).fileName(), err.isEmpty() ? QStringLiteral("Unknown error") : err));
+		}
+	}
+
+	refreshSongList(searchEdit->text().trimmed());
+
+	if (!firstTitle.isEmpty()) {
+		openSong(firstTitle, false);
+	}
+
+	if (failCount > 0) {
+		QMessageBox::warning(
+			this, QStringLiteral("Import Completed with Errors"),
+			QStringLiteral("Successfully imported %1 song(s).\nFailed to import %2 file(s):\n%3")
+				.arg(totalImported)
+				.arg(failCount)
+				.arg(errorMessages.join(QLatin1Char('\n'))));
+	} else if (totalImported > 0) {
+		QMessageBox::information(
+			this, QStringLiteral("Import Successful"),
+			QStringLiteral("Successfully imported %1 song(s) into your library!").arg(totalImported));
+	}
+}
 void LyricsDock::openSongsFolder()
 {
 	QDesktopServices::openUrl(QUrl::fromLocalFile(SongLibrary::instance().userDir()));

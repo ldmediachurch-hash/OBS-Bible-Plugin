@@ -797,8 +797,135 @@ bool ScriptureDock::openListIndex(int index, bool fromEnd)
 	return true;
 }
 
-void ScriptureDock::importBible() {}
-void ScriptureDock::removeBible() {}
+void ScriptureDock::importBible()
+{
+	const QString file = QFileDialog::getOpenFileName(
+		this, QStringLiteral("Import Bible Translation"), QString(),
+		QStringLiteral("All Supported Bibles (*.xml *.json *.bbl.mybible *.opensong);;"
+			       "JSON Bibles (*.json);;"
+			       "XML Bibles (*.xml);;"
+			       "All Files (*.*)"));
+	if (file.isEmpty())
+		return;
+
+	QString err;
+	QString suggestedName;
+	QString suggestedAbbrev;
+
+	BiblePtr parsed = parseBibleFile(file, &err, &suggestedName, &suggestedAbbrev);
+	if (!parsed || parsed->books.empty()) {
+		QMessageBox::critical(this, QStringLiteral("Import Failed"),
+				      err.isEmpty() ? QStringLiteral("Could not parse Bible from selected file.")
+						    : err);
+		return;
+	}
+
+	QDialog dlg(this);
+	dlg.setWindowTitle(QStringLiteral("Confirm Bible Import"));
+	dlg.setMinimumWidth(380);
+
+	auto *layout = new QVBoxLayout(&dlg);
+	layout->setSpacing(10);
+
+	int verseCount = 0;
+	if (parsed->ensureLoaded()) {
+		for (const auto &b : parsed->books) {
+			for (const auto &c : b.chapters) {
+				verseCount += static_cast<int>(c.size());
+			}
+		}
+	}
+
+	auto *infoLabel = new QLabel(QStringLiteral("Found %1 books and %2 verses in %3.")
+					     .arg(parsed->books.size())
+					     .arg(verseCount)
+					     .arg(QFileInfo(file).fileName()),
+				     &dlg);
+	infoLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
+	infoLabel->setWordWrap(true);
+	layout->addWidget(infoLabel);
+
+	auto *form = new QFormLayout();
+	auto *nameEdit = new QLineEdit(&dlg);
+	nameEdit->setText(suggestedName);
+	form->addRow(QStringLiteral("Translation Name:"), nameEdit);
+
+	auto *abbrevEdit = new QLineEdit(&dlg);
+	abbrevEdit->setText(suggestedAbbrev.isEmpty() ? QStringLiteral("CUSTOM") : suggestedAbbrev);
+	form->addRow(QStringLiteral("Abbreviation:"), abbrevEdit);
+	layout->addLayout(form);
+
+	auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+	btnBox->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Import"));
+	connect(btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+	connect(btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+	layout->addWidget(btnBox);
+
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+
+	const QString finalName = nameEdit->text().trimmed();
+	const QString finalAbbrev = abbrevEdit->text().trimmed().toUpper();
+
+	if (finalAbbrev.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Invalid Abbreviation"),
+				     QStringLiteral("Please provide a short abbreviation, e.g. 'NKJV' or 'NIV'."));
+		return;
+	}
+
+	BiblePtr installed = BibleLibrary::instance().install(parsed, finalName, finalAbbrev, &err);
+	if (!installed) {
+		QMessageBox::critical(this, QStringLiteral("Installation Failed"),
+				      err.isEmpty() ? QStringLiteral("Failed to save imported translation.") : err);
+		return;
+	}
+
+	refreshTranslations(finalAbbrev, secondaryTranslation);
+
+	int idx = primaryBox->findData(finalAbbrev);
+	if (idx >= 0)
+		primaryBox->setCurrentIndex(idx);
+
+	QMessageBox::information(
+		this, QStringLiteral("Bible Imported"),
+		QStringLiteral("Successfully imported %1 (%2)!\nIt is now available in your translations list.")
+			.arg(finalName.isEmpty() ? finalAbbrev : finalName, finalAbbrev));
+}
+
+void ScriptureDock::removeBible()
+{
+	const QString currentAbbrev = primaryBox->currentData().toString();
+	BiblePtr bible = BibleLibrary::instance().byAbbrev(currentAbbrev);
+	if (!bible)
+		return;
+
+	if (bible->builtIn) {
+		QMessageBox::information(this, QStringLiteral("Cannot Remove Translation"),
+					 QStringLiteral("'%1' is a built-in translation and cannot be removed.\n"
+							"You can only remove custom imported translations.")
+						 .arg(currentAbbrev));
+		return;
+	}
+
+	auto reply = QMessageBox::question(
+		this, QStringLiteral("Remove Translation"),
+		QStringLiteral("Are you sure you want to remove '%1 (%2)' from your translations?")
+			.arg(bible->name, bible->abbrev),
+		QMessageBox::Yes | QMessageBox::No);
+
+	if (reply != QMessageBox::Yes)
+		return;
+
+	QString err;
+	if (!BibleLibrary::instance().remove(currentAbbrev, &err)) {
+		QMessageBox::critical(this, QStringLiteral("Remove Failed"), err);
+		return;
+	}
+
+	refreshTranslations(QStringLiteral("KJV"), secondaryTranslation);
+	QMessageBox::information(this, QStringLiteral("Translation Removed"),
+				 QStringLiteral("Translation '%1' has been removed.").arg(currentAbbrev));
+}
 void ScriptureDock::openBiblesFolder()
 {
 	QDesktopServices::openUrl(QUrl::fromLocalFile(BibleLibrary::instance().userDir()));

@@ -14,6 +14,9 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRegularExpression>
 #include <QTextStream>
 #include <QXmlStreamReader>
@@ -264,6 +267,271 @@ Song parseOpenLyricsXml(const QString &xmlContent, QString *error)
 	return song;
 }
 
+Song parseSongXml(const QString &xmlContent, QString *error)
+{
+	if (xmlContent.contains(QLatin1String("<verse"), Qt::CaseInsensitive)) {
+		Song s = parseOpenLyricsXml(xmlContent, error);
+		if (s.isValid())
+			return s;
+	}
+
+	Song song;
+	QXmlStreamReader xml(xmlContent);
+	QString rawLyrics;
+
+	while (!xml.atEnd()) {
+		xml.readNext();
+		if (xml.isStartElement()) {
+			const QString tag = xml.name().toString().toLower();
+			if (tag == QStringLiteral("title")) {
+				if (song.title.isEmpty())
+					song.title = xml.readElementText().trimmed();
+			} else if (tag == QStringLiteral("author")) {
+				if (song.author.isEmpty())
+					song.author = xml.readElementText().trimmed();
+			} else if (tag == QStringLiteral("ccli") || tag == QStringLiteral("cclino")) {
+				song.ccli = xml.readElementText().trimmed();
+			} else if (tag == QStringLiteral("copyright")) {
+				song.copyright = xml.readElementText().trimmed();
+			} else if (tag == QStringLiteral("presentation") || tag == QStringLiteral("verseorder") ||
+				   tag == QStringLiteral("order")) {
+				song.order = xml.readElementText().trimmed();
+			} else if (tag == QStringLiteral("lyrics") || tag == QStringLiteral("words")) {
+				rawLyrics = xml.readElementText();
+			}
+		}
+	}
+
+	if (!rawLyrics.isEmpty()) {
+		QStringList cleanedLines;
+		for (const QString &line : rawLyrics.split(QLatin1Char('\n'))) {
+			QString trimmed = line.trimmed();
+			if (trimmed.startsWith(QLatin1Char('.')) || trimmed.startsWith(QLatin1Char(';')))
+				continue;
+			cleanedLines.push_back(line);
+		}
+		Song parsed = parseNativeSong(cleanedLines.join(QLatin1Char('\n')), song.title);
+		song.sections = parsed.sections;
+		if (song.title.isEmpty())
+			song.title = parsed.title;
+	}
+
+	return song;
+}
+
+static Song parseJsonObjectToSong(const QJsonObject &obj)
+{
+	Song song;
+
+	for (const char *k : {"title", "name", "song", "title_name"}) {
+		if (obj.contains(QLatin1String(k)) && obj.value(QLatin1String(k)).isString()) {
+			song.title = obj.value(QLatin1String(k)).toString().trimmed();
+			break;
+		}
+	}
+
+	for (const char *k : {"author", "artist", "composer", "writer", "authors"}) {
+		if (obj.contains(QLatin1String(k))) {
+			if (obj.value(QLatin1String(k)).isString()) {
+				song.author = obj.value(QLatin1String(k)).toString().trimmed();
+			} else if (obj.value(QLatin1String(k)).isArray()) {
+				QStringList authors;
+				for (const auto &av : obj.value(QLatin1String(k)).toArray())
+					authors.push_back(av.toString().trimmed());
+				song.author = authors.join(QStringLiteral(", "));
+			}
+			break;
+		}
+	}
+
+	for (const char *k : {"ccli", "ccli_number", "ccliNo", "ccliNumber"}) {
+		if (obj.contains(QLatin1String(k))) {
+			if (obj.value(QLatin1String(k)).isString())
+				song.ccli = obj.value(QLatin1String(k)).toString().trimmed();
+			else if (obj.value(QLatin1String(k)).isDouble())
+				song.ccli = QString::number(obj.value(QLatin1String(k)).toInt());
+			break;
+		}
+	}
+
+	if (obj.contains(QLatin1String("copyright")) && obj.value(QLatin1String("copyright")).isString())
+		song.copyright = obj.value(QLatin1String("copyright")).toString().trimmed();
+
+	for (const char *k : {"order", "sequence", "arrangement", "verseOrder", "presentation"}) {
+		if (obj.contains(QLatin1String(k)) && obj.value(QLatin1String(k)).isString()) {
+			song.order = obj.value(QLatin1String(k)).toString().trimmed();
+			break;
+		}
+	}
+
+	for (const char *k : {"lyrics", "text", "content", "words"}) {
+		if (obj.contains(QLatin1String(k)) && obj.value(QLatin1String(k)).isString()) {
+			const QString ltext = obj.value(QLatin1String(k)).toString();
+			Song parsed = parseNativeSong(ltext, song.title);
+			if (!parsed.sections.empty()) {
+				song.sections = parsed.sections;
+				if (song.title.isEmpty())
+					song.title = parsed.title;
+				if (song.author.isEmpty())
+					song.author = parsed.author;
+				return song;
+			}
+		}
+	}
+
+	QJsonArray secArray;
+	for (const char *k : {"sections", "verses", "slides", "parts", "stanzas"}) {
+		if (obj.contains(QLatin1String(k)) && obj.value(QLatin1String(k)).isArray()) {
+			secArray = obj.value(QLatin1String(k)).toArray();
+			break;
+		}
+	}
+
+	if (!secArray.isEmpty()) {
+		for (const auto &item : secArray) {
+			if (item.isObject()) {
+				const QJsonObject so = item.toObject();
+				SongSection sec;
+				for (const char *nk : {"name", "title", "label", "type", "section", "part"}) {
+					if (so.contains(QLatin1String(nk)) && so.value(QLatin1String(nk)).isString()) {
+						sec.name = so.value(QLatin1String(nk)).toString().trimmed();
+						break;
+					}
+				}
+				if (sec.name.isEmpty())
+					sec.name = QStringLiteral("Verse %1").arg(song.sections.size() + 1);
+				sec.shortCode = sectionToShortCode(sec.name);
+
+				for (const char *lk : {"lines", "slides", "text", "content", "lyrics"}) {
+					if (so.contains(QLatin1String(lk))) {
+						if (so.value(QLatin1String(lk)).isArray()) {
+							QStringList lines;
+							for (const auto &lv : so.value(QLatin1String(lk)).toArray()) {
+								if (lv.isString()) {
+									lines.push_back(lv.toString().trimmed());
+								} else if (lv.isArray()) {
+									QStringList sublines;
+									for (const auto &slv : lv.toArray())
+										sublines.push_back(
+											slv.toString().trimmed());
+									if (!sublines.isEmpty())
+										sec.rawSlides.push_back(sublines);
+								}
+							}
+							if (!lines.isEmpty())
+								sec.rawSlides.push_back(lines);
+						} else if (so.value(QLatin1String(lk)).isString()) {
+							QString t = so.value(QLatin1String(lk)).toString();
+							QStringList lines;
+							for (const QString &ln : t.split(QLatin1Char('\n'))) {
+								QString s = ln.trimmed();
+								if (!s.isEmpty())
+									lines.push_back(s);
+							}
+							if (!lines.isEmpty())
+								sec.rawSlides.push_back(lines);
+						}
+						break;
+					}
+				}
+				if (!sec.rawSlides.empty())
+					song.sections.push_back(sec);
+			} else if (item.isString()) {
+				QString t = item.toString().trimmed();
+				if (!t.isEmpty()) {
+					SongSection sec;
+					sec.name = QStringLiteral("Verse %1").arg(song.sections.size() + 1);
+					sec.shortCode = sectionToShortCode(sec.name);
+					QStringList lines;
+					for (const QString &ln : t.split(QLatin1Char('\n'))) {
+						QString s = ln.trimmed();
+						if (!s.isEmpty())
+							lines.push_back(s);
+					}
+					if (!lines.isEmpty()) {
+						sec.rawSlides.push_back(lines);
+						song.sections.push_back(sec);
+					}
+				}
+			}
+		}
+	} else {
+		for (auto it = obj.begin(); it != obj.end(); ++it) {
+			const QString k = it.key();
+			if (k == QStringLiteral("title") || k == QStringLiteral("author") ||
+			    k == QStringLiteral("ccli") || k == QStringLiteral("copyright") ||
+			    k == QStringLiteral("order"))
+				continue;
+			if (it.value().isString() || it.value().isArray()) {
+				SongSection sec;
+				sec.name = k;
+				sec.shortCode = sectionToShortCode(k);
+				if (it.value().isString()) {
+					for (const QString &ln : it.value().toString().split(QLatin1Char('\n'))) {
+						QString s = ln.trimmed();
+						if (!s.isEmpty())
+							sec.rawSlides.push_back({s});
+					}
+				} else if (it.value().isArray()) {
+					QStringList lines;
+					for (const auto &lv : it.value().toArray())
+						if (lv.isString())
+							lines.push_back(lv.toString().trimmed());
+					if (!lines.isEmpty())
+						sec.rawSlides.push_back(lines);
+				}
+				if (!sec.rawSlides.empty())
+					song.sections.push_back(sec);
+			}
+		}
+	}
+
+	return song;
+}
+
+std::vector<Song> parseSongJson(const QByteArray &jsonData, QString *error)
+{
+	std::vector<Song> songs;
+	QJsonParseError pe;
+	QJsonDocument doc = QJsonDocument::fromJson(jsonData, &pe);
+	if (doc.isNull()) {
+		if (error)
+			*error = QStringLiteral("JSON error: %1").arg(pe.errorString());
+		return songs;
+	}
+
+	if (doc.isArray()) {
+		for (const auto &item : doc.array()) {
+			if (item.isObject()) {
+				Song s = parseJsonObjectToSong(item.toObject());
+				if (s.isValid())
+					songs.push_back(s);
+			}
+		}
+	} else if (doc.isObject()) {
+		const QJsonObject root = doc.object();
+		for (const char *k : {"songs", "items", "data", "lyrics"}) {
+			if (root.contains(QLatin1String(k)) && root.value(QLatin1String(k)).isArray()) {
+				for (const auto &item : root.value(QLatin1String(k)).toArray()) {
+					if (item.isObject()) {
+						Song s = parseJsonObjectToSong(item.toObject());
+						if (s.isValid())
+							songs.push_back(s);
+					}
+				}
+				if (!songs.empty())
+					return songs;
+			}
+		}
+
+		Song s = parseJsonObjectToSong(root);
+		if (s.isValid())
+			songs.push_back(s);
+	}
+
+	return songs;
+}
+
 QString serializeNativeSong(const Song &song)
 {
 	QString out;
@@ -471,56 +739,80 @@ std::vector<Song> SongLibrary::search(const QString &query) const
 	return titleMatches;
 }
 
-bool SongLibrary::importSongFile(const QString &srcPath, QString *importedTitle, QString *error)
+int SongLibrary::importSongFileCount(const QString &srcPath, QString *firstImportedTitle, QString *error)
 {
 	QFile src(srcPath);
 	if (!src.open(QIODevice::ReadOnly)) {
 		if (error)
 			*error = QStringLiteral("Could not open file: %1").arg(srcPath);
-		return false;
+		return 0;
 	}
 
 	const QFileInfo fi(srcPath);
 	const QString ext = fi.suffix().toLower();
-	Song song;
+	const QByteArray rawData = src.readAll();
+	src.close();
 
-	if (ext == QStringLiteral("xml")) {
-		const QString content = QString::fromUtf8(src.readAll());
-		song = parseOpenLyricsXml(content, error);
+	std::vector<Song> importedSongs;
+
+	if (ext == QStringLiteral("json")) {
+		importedSongs = parseSongJson(rawData, error);
+		for (auto &s : importedSongs) {
+			if (s.title.isEmpty())
+				s.title = fi.completeBaseName();
+		}
+	} else if (ext == QStringLiteral("xml") || rawData.trimmed().startsWith('<')) {
+		const QString content = QString::fromUtf8(rawData);
+		Song song = parseSongXml(content, error);
 		if (song.title.isEmpty())
 			song.title = fi.completeBaseName();
+		if (song.isValid())
+			importedSongs.push_back(song);
 	} else {
-		QTextStream in(&src);
+		QTextStream in(rawData);
 		const QString content = in.readAll();
-		song = parseNativeSong(content, fi.completeBaseName());
+		Song song = parseNativeSong(content, fi.completeBaseName());
+		if (song.isValid())
+			importedSongs.push_back(song);
 	}
 
-	if (!song.isValid()) {
+	if (importedSongs.empty()) {
 		if (error && error->isEmpty())
-			*error = QStringLiteral("Could not parse song from %1").arg(fi.fileName());
-		return false;
+			*error = QStringLiteral("Could not parse any valid songs from %1").arg(fi.fileName());
+		return 0;
 	}
 
-	const QString serialized = serializeNativeSong(song);
-	const QString safeName = cleanFileName(song.title) + QStringLiteral(".txt");
-	const QString destPath = QDir(userPath).filePath(safeName);
+	int savedCount = 0;
+	for (const auto &song : importedSongs) {
+		const QString serialized = serializeNativeSong(song);
+		const QString safeName = cleanFileName(song.title) + QStringLiteral(".txt");
+		const QString destPath = QDir(userPath).filePath(safeName);
 
-	QFile dest(destPath);
-	if (!dest.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+		QFile dest(destPath);
+		if (dest.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+			QTextStream out(&dest);
+			out << serialized;
+			dest.close();
+			savedCount++;
+		}
+	}
+
+	if (savedCount == 0) {
 		if (error)
-			*error = QStringLiteral("Could not write to: %1").arg(destPath);
-		return false;
+			*error = QStringLiteral("Could not write song(s) to folder: %1").arg(userPath);
+		return 0;
 	}
-	QTextStream out(&dest);
-	out << serialized;
-	dest.close();
 
-	if (importedTitle)
-		*importedTitle = song.title;
+	if (firstImportedTitle && !importedSongs.empty())
+		*firstImportedTitle = importedSongs.front().title;
 
-	// Reload library to update in-memory list
 	load(QString(), userPath);
-	return true;
+	return savedCount;
+}
+
+bool SongLibrary::importSongFile(const QString &srcPath, QString *importedTitle, QString *error)
+{
+	return importSongFileCount(srcPath, importedTitle, error) > 0;
 }
 
 bool SongLibrary::saveSong(const Song &song, const QString &suggestedFileName, QString *savedPath, QString *error)
