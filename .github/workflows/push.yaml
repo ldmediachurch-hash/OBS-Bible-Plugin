@@ -102,20 +102,34 @@ jobs:
             echo "    ${file##*/}: $(sha256sum "${file}" | cut -d " " -f 1)" >> ${{ github.workspace }}/CHECKSUMS.txt
           done
 
-      - name: Create Release 🛫
+      - name: Publish Release Assets 🛫
         if: fromJSON(steps.check.outputs.validTag)
-        id: create_release
-        uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564
-        with:
-          draft: true
-          prerelease: ${{ fromJSON(steps.check.outputs.prerelease) }}
-          tag_name: ${{ steps.check.outputs.version }}
-          name: ${{ needs.build-project.outputs.pluginName }} ${{ steps.check.outputs.version }}
-          body_path: ${{ github.workspace }}/CHECKSUMS.txt
-          files: |
-            ${{ github.workspace }}/*.exe
-            ${{ github.workspace }}/*.zip
-            ${{ github.workspace }}/*.pkg
-            ${{ github.workspace }}/*.deb
-            ${{ github.workspace }}/*.ddeb
-            ${{ github.workspace }}/*.tar.xz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${{ steps.check.outputs.version }}"
+          title="${{ needs.build-project.outputs.pluginName }} ${{ steps.check.outputs.version }}"
+          
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "Release ${tag} exists, uploading assets with --clobber..."
+            gh release upload "${tag}" \
+              ${{ github.workspace }}/*.zip \
+              ${{ github.workspace }}/*.pkg \
+              ${{ github.workspace }}/*.deb \
+              ${{ github.workspace }}/*.ddeb \
+              ${{ github.workspace }}/*.tar.xz \
+              --clobber
+            gh release edit "${tag}" --title "${title}" --notes-file "${{ github.workspace }}/CHECKSUMS.txt"
+          else
+            echo "Creating release ${tag}..."
+            gh release create "${tag}" \
+              ${{ github.workspace }}/*.zip \
+              ${{ github.workspace }}/*.pkg \
+              ${{ github.workspace }}/*.deb \
+              ${{ github.workspace }}/*.ddeb \
+              ${{ github.workspace }}/*.tar.xz \
+              --title "${title}" \
+              --notes-file "${{ github.workspace }}/CHECKSUMS.txt" \
+              --clobber
+          fi
