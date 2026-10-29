@@ -176,6 +176,7 @@ if(BUILD_EVAL OR BUILD_TESTS)
     src/bible.hpp
   )
   target_link_libraries(ldww-eval PRIVATE Qt6::Core Qt6::Gui whisper)
+  target_include_directories(ldww-eval PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   set_target_properties(
     ldww-eval
     PROPERTIES AUTOMOC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON

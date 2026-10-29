@@ -862,7 +862,9 @@ void LyricsDock::clearLive()
 	}
 	slideList->viewport()->update();
 
-	DisplayState::instance().setLiveContent(Channel::Lyrics, DisplayContent());
+	DisplayContent empty;
+	empty.visible = false;
+	DisplayState::get(Channel::Lyrics).set(empty);
 	updateLiveButton();
 	updatePreview();
 }
@@ -871,7 +873,9 @@ void LyricsDock::toggleBlank()
 {
 	blanked = blankButton->isChecked();
 	if (blanked) {
-		DisplayState::instance().setLiveContent(Channel::Lyrics, DisplayContent());
+		DisplayContent empty;
+		empty.visible = false;
+		DisplayState::get(Channel::Lyrics).set(empty);
 	} else if (live) {
 		pushToOutput();
 	}
@@ -893,7 +897,7 @@ void LyricsDock::pushToOutput()
 			entry.text = line;
 			content.entries.push_back(entry);
 		}
-		DisplayState::instance().setLiveContent(Channel::Lyrics, content);
+		DisplayState::get(Channel::Lyrics).set(content);
 	}
 }
 

@@ -684,7 +684,9 @@ void ScriptureDock::clearLive()
 	}
 	results->viewport()->update();
 
-	DisplayState::instance().setLiveContent(Channel::Scripture, DisplayContent());
+	DisplayContent empty;
+	empty.visible = false;
+	DisplayState::get(Channel::Scripture).set(empty);
 	updateLiveButton();
 	updatePreview();
 }
@@ -716,7 +718,7 @@ void ScriptureDock::pushToOutput()
 			content.entries.push_back(e2);
 		}
 
-		DisplayState::instance().setLiveContent(Channel::Scripture, content);
+		DisplayState::get(Channel::Scripture).set(content);
 	}
 }
 

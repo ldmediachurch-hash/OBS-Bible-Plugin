@@ -22,6 +22,18 @@ class QPushButton;
 class QStackedWidget;
 class QToolButton;
 
+class ConfidenceBarWidget : public QWidget {
+public:
+	explicit ConfidenceBarWidget(QWidget *parent = nullptr);
+	void setConfidence(int conf);
+
+protected:
+	void paintEvent(QPaintEvent *event) override;
+
+private:
+	int m_confidence = 95;
+};
+
 class WorshipWordDock : public QWidget {
 	Q_OBJECT
 
@@ -75,7 +87,7 @@ private:
 	QWidget *m_suggestionCard = nullptr;
 	QLabel *m_suggestionKicker = nullptr;
 	QLabel *m_suggestionTitle = nullptr;
-	QWidget *m_confidenceBar = nullptr;
+	ConfidenceBarWidget *m_confidenceBar = nullptr;
 	QPushButton *m_previewBtn = nullptr;
 	QPushButton *m_showBtn = nullptr;
 	QToolButton *m_dismissBtn = nullptr;

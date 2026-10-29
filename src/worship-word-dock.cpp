@@ -39,40 +39,32 @@ QString dockConfigPath()
 	return s;
 }
 
-// Custom Confidence Bar Widget
-class ConfidenceBarWidget : public QWidget {
-public:
-	explicit ConfidenceBarWidget(QWidget *parent = nullptr) : QWidget(parent)
-	{
-		setFixedHeight(2);
-		setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-	}
-
-	void setConfidence(int conf)
-	{
-		m_confidence = std::clamp(conf, 0, 100);
-		update();
-	}
-
-protected:
-	void paintEvent(QPaintEvent *) override
-	{
-		QPainter p(this);
-		p.setRenderHint(QPainter::Antialiasing, true);
-
-		p.fillRect(rect(), QColor(255, 255, 255, 30));
-
-		const int fillW = (width() * m_confidence) / 100;
-		if (fillW > 0) {
-			p.fillRect(QRect(0, 0, fillW, height()), QColor(255, 255, 255, 230));
-		}
-	}
-
-private:
-	int m_confidence = 95;
-};
-
 } // namespace
+
+ConfidenceBarWidget::ConfidenceBarWidget(QWidget *parent) : QWidget(parent)
+{
+	setFixedHeight(2);
+	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+}
+
+void ConfidenceBarWidget::setConfidence(int conf)
+{
+	m_confidence = std::clamp(conf, 0, 100);
+	update();
+}
+
+void ConfidenceBarWidget::paintEvent(QPaintEvent *)
+{
+	QPainter p(this);
+	p.setRenderHint(QPainter::Antialiasing, true);
+
+	p.fillRect(rect(), QColor(255, 255, 255, 30));
+
+	const int fillW = (width() * m_confidence) / 100;
+	if (fillW > 0) {
+		p.fillRect(QRect(0, 0, fillW, height()), QColor(255, 255, 255, 230));
+	}
+}
 
 WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 {
@@ -346,9 +338,8 @@ void WorshipWordDock::onSuggestionDetected(Channel ch, const QString &ref, const
 	m_suggestionKicker->setText(kicker);
 	m_suggestionTitle->setText(ref);
 
-	auto *bar = qobject_cast<ConfidenceBarWidget *>(m_confidenceBar);
-	if (bar) {
-		bar->setConfidence(confidence);
+	if (m_confidenceBar) {
+		m_confidenceBar->setConfidence(confidence);
 	}
 
 	m_suggestionCard->setVisible(true);
