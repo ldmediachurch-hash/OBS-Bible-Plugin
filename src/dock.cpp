@@ -38,6 +38,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QPainterPath>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QStyledItemDelegate>
 #include <QTextStream>
 #include <QToolButton>
