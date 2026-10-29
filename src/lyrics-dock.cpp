@@ -289,7 +289,8 @@ public:
 
 } // namespace
 
-LyricsDock::LyricsDock(QWidget *parent) : QWidget(parent)
+LyricsDock::LyricsDock(QWidget *parent)
+	: QWidget(parent)
 {
 	setMinimumWidth(300);
 	setupLayout();

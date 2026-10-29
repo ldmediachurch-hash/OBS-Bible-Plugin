@@ -336,7 +336,7 @@ static Song parseJsonObjectToSong(const QJsonObject &obj)
 				song.author = obj.value(QLatin1String(k)).toString().trimmed();
 			} else if (obj.value(QLatin1String(k)).isArray()) {
 				QStringList authors;
-				for (const auto &av : obj.value(QLatin1String(k)).toArray())
+				for (const QJsonValue av : obj.value(QLatin1String(k)).toArray())
 					authors.push_back(av.toString().trimmed());
 				song.author = authors.join(QStringLiteral(", "));
 			}
@@ -406,12 +406,12 @@ static Song parseJsonObjectToSong(const QJsonObject &obj)
 					if (so.contains(QLatin1String(lk))) {
 						if (so.value(QLatin1String(lk)).isArray()) {
 							QStringList lines;
-							for (const auto &lv : so.value(QLatin1String(lk)).toArray()) {
+							for (const QJsonValue lv : so.value(QLatin1String(lk)).toArray()) {
 								if (lv.isString()) {
 									lines.push_back(lv.toString().trimmed());
 								} else if (lv.isArray()) {
 									QStringList sublines;
-									for (const auto &slv : lv.toArray())
+									for (const QJsonValue slv : lv.toArray())
 										sublines.push_back(
 											slv.toString().trimmed());
 									if (!sublines.isEmpty())
@@ -474,7 +474,7 @@ static Song parseJsonObjectToSong(const QJsonObject &obj)
 					}
 				} else if (it.value().isArray()) {
 					QStringList lines;
-					for (const auto &lv : it.value().toArray())
+					for (const QJsonValue lv : it.value().toArray())
 						if (lv.isString())
 							lines.push_back(lv.toString().trimmed());
 					if (!lines.isEmpty())
@@ -501,7 +501,7 @@ std::vector<Song> parseSongJson(const QByteArray &jsonData, QString *error)
 	}
 
 	if (doc.isArray()) {
-		for (const auto &item : doc.array()) {
+		for (const QJsonValue item : doc.array()) {
 			if (item.isObject()) {
 				Song s = parseJsonObjectToSong(item.toObject());
 				if (s.isValid())
@@ -512,7 +512,7 @@ std::vector<Song> parseSongJson(const QByteArray &jsonData, QString *error)
 		const QJsonObject root = doc.object();
 		for (const char *k : {"songs", "items", "data", "lyrics"}) {
 			if (root.contains(QLatin1String(k)) && root.value(QLatin1String(k)).isArray()) {
-				for (const auto &item : root.value(QLatin1String(k)).toArray()) {
+				for (const QJsonValue item : root.value(QLatin1String(k)).toArray()) {
 					if (item.isObject()) {
 						Song s = parseJsonObjectToSong(item.toObject());
 						if (s.isValid())
