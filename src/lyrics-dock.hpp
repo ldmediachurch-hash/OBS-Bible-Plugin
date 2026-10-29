@@ -42,6 +42,7 @@ public slots:
 	void clearLive();
 	void toggleBlank();
 	bool openSong(const QString &titleOrPath, bool fromList = false);
+	void jumpToSection(const QString &shortCode);
 
 private slots:
 	void runSearch();
@@ -49,7 +50,6 @@ private slots:
 	void songSelected(QListWidgetItem *item);
 	void slideSelectionChanged();
 	void linesPerSlideChanged();
-	void jumpToSection(const QString &shortCode);
 	void addToList();
 	void removeFromList();
 	void loadList();

@@ -255,7 +255,20 @@ void WorshipWordDock::acceptSuggestion(bool goLive)
 			m_scripture->goLive();
 	} else {
 		setMode(0);
-		m_lyrics->openSong(m_suggestedRef, false);
+		QString songTitle = m_suggestedText;
+		QString sec;
+		if (m_suggestedRef.contains(QStringLiteral(" · "))) {
+			if (songTitle.isEmpty())
+				songTitle = m_suggestedRef.section(QStringLiteral(" · "), 0, 0).trimmed();
+			sec = m_suggestedRef.section(QStringLiteral(" · "), 1, 1).trimmed();
+		} else if (songTitle.isEmpty()) {
+			songTitle = m_suggestedRef.trimmed();
+		}
+
+		m_lyrics->openSong(songTitle, false);
+		if (!sec.isEmpty()) {
+			m_lyrics->jumpToSection(sec);
+		}
 		if (goLive)
 			m_lyrics->goLive();
 	}

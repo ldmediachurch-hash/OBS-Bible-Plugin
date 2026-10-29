@@ -74,8 +74,8 @@ private:
 	// Speech inference & Pattern matchers
 	void analyzeBuffer(const std::vector<float> &chunk);
 	QString transcribeChunk(const std::vector<float> &chunk);
-	void detectScripture(const QString &transcript);
-	void detectLyrics(const QString &transcript);
+	bool detectScripture(const QString &transcript);
+	bool detectLyrics(const QString &transcript);
 
 	std::atomic<bool> m_listening{false};
 	std::atomic<float> m_level{0.0f};
@@ -91,8 +91,9 @@ private:
 	std::mutex m_whisperMutex;
 	QString m_modelStatusText{QStringLiteral("Model not loaded")};
 
-	// Ring buffer (pre-allocated 5 seconds @ 16kHz)
-	static constexpr size_t kBufferSize = 80000;
+	// Resampler & Ring buffer (pre-allocated 10 seconds @ 16kHz)
+	double m_resamplePos = 0.0;
+	static constexpr size_t kBufferSize = 160000;
 	std::vector<float> m_ringBuffer;
 	std::atomic<size_t> m_writeIndex{0};
 	std::atomic<size_t> m_readIndex{0};
@@ -102,6 +103,7 @@ private:
 
 	uint64_t m_lastSuggestionTime = 0;
 	QString m_lastSuggestedRef;
+	QString m_recentTranscript;
 };
 
 // Compact VU Meter Widget

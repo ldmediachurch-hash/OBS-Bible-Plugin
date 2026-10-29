@@ -22,6 +22,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QPainter>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSet>
 #include <QTimer>
 
 #include <algorithm>
@@ -92,7 +93,15 @@ QString defaultModelDestPath()
 QString normalizeSpokenText(QString s)
 {
 	s = s.toLower();
-	s.replace(QRegularExpression(QStringLiteral("[,.:;?!\\-\\(\\)—]")), QStringLiteral(" "));
+	s.replace(QRegularExpression(QStringLiteral("[,.:;?!\\-\\(\\)—_]")), QStringLiteral(" "));
+
+	// Roman numerals before Bible books: e.g. "ii timothy" -> "2 timothy"
+	s.replace(QRegularExpression(QStringLiteral("\\bi\\s+(?=(?:corinthians|samuel|kings|chronicles|thessalonians|timothy|peter|john))")), QStringLiteral("1 "));
+	s.replace(QRegularExpression(QStringLiteral("\\bii\\s+(?=(?:corinthians|samuel|kings|chronicles|thessalonians|timothy|peter|john))")), QStringLiteral("2 "));
+	s.replace(QRegularExpression(QStringLiteral("\\biii\\s+(?=(?:john))")), QStringLiteral("3 "));
+
+	// Saint / St prefixes
+	s.replace(QRegularExpression(QStringLiteral("\\b(?:st|saint)\\s+(?=(?:matthew|mark|luke|john|peter|paul|james|jude))")), QStringLiteral(""));
 
 	// Ordinals
 	s.replace(QRegularExpression(QStringLiteral("\\bfirst\\b")), QStringLiteral("1"));
@@ -124,6 +133,11 @@ QString normalizeSpokenText(QString s)
 		for (int u = 1; u <= 9; ++u) {
 			s.replace(QStringLiteral("%1 %2").arg(t).arg(u), QString::number(t + u));
 		}
+	}
+
+	// Psalm 119 and hundred composite: "100 19" -> "119"
+	for (int u = 1; u <= 99; ++u) {
+		s.replace(QStringLiteral("100 %1").arg(u), QString::number(100 + u));
 	}
 
 	return s.simplified();
@@ -298,12 +312,31 @@ void AudioEngine::processAudio(const float *samples, uint32_t frames, bool muted
 	float norm = std::clamp((dB + 50.0f) / 50.0f, 0.0f, 1.0f);
 	m_level.store(norm, std::memory_order_relaxed);
 
-	// Push downsampled samples into ring buffer (step by 3 for ~48kHz -> 16kHz)
-	size_t w = m_writeIndex.load(std::memory_order_relaxed);
-	for (uint32_t i = 0; i < frames; i += 3) {
-		m_ringBuffer[w] = samples[i];
-		w = (w + 1) % kBufferSize;
+	// Resample to 16,000 Hz using linear interpolation
+	uint32_t inRate = 48000;
+	struct obs_audio_info aoi;
+	if (obs_get_audio_info(&aoi) && aoi.samples_per_sec > 0) {
+		inRate = aoi.samples_per_sec;
 	}
+
+	const double ratio = static_cast<double>(inRate) / 16000.0;
+	size_t w = m_writeIndex.load(std::memory_order_relaxed);
+
+	while (m_resamplePos < static_cast<double>(frames) - 1.0) {
+		size_t idx0 = static_cast<size_t>(m_resamplePos);
+		size_t idx1 = idx0 + 1;
+		float frac = static_cast<float>(m_resamplePos - idx0);
+		float sample = (1.0f - frac) * samples[idx0] + frac * samples[idx1];
+
+		m_ringBuffer[w] = sample;
+		w = (w + 1) % kBufferSize;
+
+		m_resamplePos += ratio;
+	}
+	m_resamplePos -= static_cast<double>(frames);
+	if (m_resamplePos < 0.0)
+		m_resamplePos = 0.0;
+
 	m_writeIndex.store(w, std::memory_order_release);
 }
 
@@ -324,11 +357,15 @@ void AudioEngine::stopWorker()
 
 void AudioEngine::workerLoop()
 {
-	// 2.5 seconds of audio @ 16kHz = 40,000 samples
-	std::vector<float> chunk(40000, 0.0f);
+	// 3.5 seconds of audio @ 16kHz = 56,000 samples
+	constexpr size_t kChunkSize = 56000;
+	// Hop / advance by 1.25 seconds = 20,000 samples (64% overlap)
+	constexpr size_t kHopSize = 20000;
+
+	std::vector<float> chunk(kChunkSize, 0.0f);
 
 	while (m_workerRunning.load(std::memory_order_relaxed)) {
-		std::this_thread::sleep_for(std::chrono::milliseconds(500));
+		std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
 		if (!m_listening.load(std::memory_order_relaxed))
 			continue;
@@ -337,13 +374,16 @@ void AudioEngine::workerLoop()
 		size_t r = m_readIndex.load(std::memory_order_relaxed);
 
 		size_t available = (w >= r) ? (w - r) : (kBufferSize - r + w);
-		if (available < chunk.size())
+		if (available < kChunkSize)
 			continue;
 
-		for (size_t i = 0; i < chunk.size(); i++) {
-			chunk[i] = m_ringBuffer[r];
-			r = (r + 1) % kBufferSize;
+		size_t tempR = r;
+		for (size_t i = 0; i < kChunkSize; i++) {
+			chunk[i] = m_ringBuffer[tempR];
+			tempR = (tempR + 1) % kBufferSize;
 		}
+
+		r = (r + kHopSize) % kBufferSize;
 		m_readIndex.store(r, std::memory_order_release);
 
 		analyzeBuffer(chunk);
@@ -352,24 +392,48 @@ void AudioEngine::workerLoop()
 
 void AudioEngine::analyzeBuffer(const std::vector<float> &chunk)
 {
-	// Voice activity detection: check if energy > noise gate (-38 dB)
-	float sum = 0.0f;
-	for (float s : chunk)
-		sum += s * s;
-	float rms = sqrtf(sum / static_cast<float>(chunk.size()));
+	// Check peak energy in 250ms sub-windows so quiet speech isn't cut off
+	float maxSubRms = 0.0f;
+	constexpr size_t subSize = 4000; // 250ms @ 16kHz
+	for (size_t i = 0; i + subSize <= chunk.size(); i += subSize) {
+		float subSum = 0.0f;
+		for (size_t j = 0; j < subSize; ++j) {
+			float s = chunk[i + j];
+			subSum += s * s;
+		}
+		float subRms = sqrtf(subSum / static_cast<float>(subSize));
+		if (subRms > maxSubRms)
+			maxSubRms = subRms;
+	}
 
-	if (rms < 0.012f)
+	// Gate threshold: 0.003f (-50 dB)
+	if (maxSubRms < 0.003f)
 		return;
 
 	QString transcript = transcribeChunk(chunk);
 	if (transcript.isEmpty())
 		return;
 
+	// Maintain rolling context of last transcribed words to never lose cross-chunk phrases
+	QString fullContext = m_recentTranscript;
+	if (!fullContext.isEmpty())
+		fullContext += QLatin1Char(' ');
+	fullContext += transcript;
+
+	QStringList words = fullContext.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+	if (words.size() > 30) {
+		words = words.mid(words.size() - 30);
+		fullContext = words.join(QLatin1Char(' '));
+	}
+	m_recentTranscript = transcript;
+
 	Channel ch = m_channel.load(std::memory_order_relaxed);
 	if (ch == Channel::Scripture) {
-		detectScripture(transcript);
+		if (!detectScripture(fullContext))
+			detectLyrics(fullContext);
 	} else {
-		detectLyrics(transcript);
+		if (!detectLyrics(fullContext))
+			detectScripture(fullContext);
 	}
 }
 
@@ -385,10 +449,12 @@ QString AudioEngine::transcribeChunk(const std::vector<float> &chunk)
 	wparams.print_realtime = false;
 	wparams.print_timestamps = false;
 	wparams.language = "en";
-	wparams.n_threads = 4;
+	wparams.n_threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 2, 4);
 	wparams.translate = false;
 	wparams.no_context = true;
 	wparams.single_segment = false;
+	wparams.initial_prompt =
+		"Church service scripture reading and worship song lyrics. Books of the Bible: Genesis, Exodus, Leviticus, Numbers, Deuteronomy, Joshua, Judges, Ruth, Samuel, Kings, Chronicles, Ezra, Nehemiah, Esther, Job, Psalms, Proverbs, Ecclesiastes, Song of Solomon, Isaiah, Jeremiah, Ezekiel, Daniel, Matthew, Mark, Luke, John, Acts, Romans, Corinthians, Galatians, Ephesians, Philippians, Colossians, Thessalonians, Timothy, Titus, Philemon, Hebrews, James, Peter, Revelation. Chapter and verse numbers. Praise the Lord, Jesus, Holy Spirit, Chorus, Verse.";
 
 	if (whisper_full(m_whisperCtx, wparams, chunk.data(), static_cast<int>(chunk.size())) != 0) {
 		return QString();
@@ -404,94 +470,65 @@ QString AudioEngine::transcribeChunk(const std::vector<float> &chunk)
 	return result.trimmed();
 }
 
-void AudioEngine::detectScripture(const QString &rawTranscript)
+bool AudioEngine::detectScripture(const QString &rawTranscript)
 {
 	uint64_t now = QDateTime::currentMSecsSinceEpoch();
-	if (now - m_lastSuggestionTime < 4500)
-		return;
+	if (now - m_lastSuggestionTime < 2500)
+		return false;
 
 	QString text = normalizeSpokenText(rawTranscript);
 	if (text.isEmpty())
-		return;
+		return false;
 
-	// Canonical book names catalog
-	static const struct {
-		const char *name;
+	struct BookAlias {
+		const char *alias;
 		const char *canonical;
-	} kBooks[] = {
-		{"genesis", "Genesis"},
-		{"exodus", "Exodus"},
-		{"leviticus", "Leviticus"},
-		{"numbers", "Numbers"},
-		{"deuteronomy", "Deuteronomy"},
-		{"joshua", "Joshua"},
-		{"judges", "Judges"},
-		{"ruth", "Ruth"},
-		{"1 samuel", "1 Samuel"},
-		{"2 samuel", "2 Samuel"},
-		{"1 kings", "1 Kings"},
-		{"2 kings", "2 Kings"},
-		{"1 chronicles", "1 Chronicles"},
-		{"2 chronicles", "2 Chronicles"},
-		{"ezra", "Ezra"},
-		{"nehemiah", "Nehemiah"},
-		{"esther", "Esther"},
-		{"job", "Job"},
-		{"psalms", "Psalms"},
-		{"psalm", "Psalms"},
-		{"proverbs", "Proverbs"},
-		{"ecclesiastes", "Ecclesiastes"},
-		{"song of solomon", "Song of Solomon"},
-		{"isaiah", "Isaiah"},
-		{"jeremiah", "Jeremiah"},
-		{"lamentations", "Lamentations"},
-		{"ezekiel", "Ezekiel"},
-		{"daniel", "Daniel"},
-		{"hosea", "Hosea"},
-		{"joel", "Joel"},
-		{"amos", "Amos"},
-		{"obadiah", "Obadiah"},
-		{"jonah", "Jonah"},
-		{"micah", "Micah"},
-		{"nahum", "Nahum"},
-		{"habakkuk", "Habakkuk"},
-		{"zephaniah", "Zephaniah"},
-		{"haggai", "Haggai"},
-		{"zechariah", "Zechariah"},
-		{"malachi", "Malachi"},
-		{"matthew", "Matthew"},
-		{"mark", "Mark"},
-		{"luke", "Luke"},
-		{"john", "John"},
-		{"acts", "Acts"},
-		{"romans", "Romans"},
-		{"1 corinthians", "1 Corinthians"},
-		{"2 corinthians", "2 Corinthians"},
-		{"galatians", "Galatians"},
-		{"ephesians", "Ephesians"},
-		{"philippians", "Philippians"},
-		{"colossians", "Colossians"},
-		{"1 thessalonians", "1 Thessalonians"},
-		{"2 thessalonians", "2 Thessalonians"},
-		{"1 timothy", "1 Timothy"},
-		{"2 timothy", "2 Timothy"},
-		{"titus", "Titus"},
-		{"philemon", "Philemon"},
-		{"hebrews", "Hebrews"},
-		{"james", "James"},
-		{"1 peter", "1 Peter"},
-		{"2 peter", "2 Peter"},
-		{"1 john", "1 John"},
-		{"2 john", "2 John"},
-		{"3 john", "3 John"},
-		{"jude", "Jude"},
-		{"revelation", "Revelation"},
 	};
 
-	for (const auto &b : kBooks) {
-		QRegularExpression rx(QStringLiteral("\\b%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?(?:\\s*(?:verse|v|from)?"
-						     "\\s*(\\d+))?")
-					      .arg(b.name));
+	static const BookAlias kAliases[] = {
+		// Multi-word aliases first
+		{"1 thessalonians", "1 Thessalonians"}, {"first thessalonians", "1 Thessalonians"}, {"1st thessalonians", "1 Thessalonians"},
+		{"2 thessalonians", "2 Thessalonians"}, {"second thessalonians", "2 Thessalonians"}, {"2nd thessalonians", "2 Thessalonians"},
+		{"1 chronicles", "1 Chronicles"}, {"first chronicles", "1 Chronicles"}, {"1st chronicles", "1 Chronicles"},
+		{"2 chronicles", "2 Chronicles"}, {"second chronicles", "2 Chronicles"}, {"2nd chronicles", "2 Chronicles"},
+		{"1 corinthians", "1 Corinthians"}, {"first corinthians", "1 Corinthians"}, {"1st corinthians", "1 Corinthians"},
+		{"2 corinthians", "2 Corinthians"}, {"second corinthians", "2 Corinthians"}, {"2nd corinthians", "2 Corinthians"},
+		{"song of solomon", "Song of Solomon"}, {"song of songs", "Song of Solomon"}, {"canticles", "Song of Solomon"},
+		{"1 timothy", "1 Timothy"}, {"first timothy", "1 Timothy"}, {"1st timothy", "1 Timothy"},
+		{"2 timothy", "2 Timothy"}, {"second timothy", "2 Timothy"}, {"2nd timothy", "2 Timothy"},
+		{"1 samuel", "1 Samuel"}, {"first samuel", "1 Samuel"}, {"1st samuel", "1 Samuel"},
+		{"2 samuel", "2 Samuel"}, {"second samuel", "2 Samuel"}, {"2nd samuel", "2 Samuel"},
+		{"1 kings", "1 Kings"}, {"first kings", "1 Kings"}, {"1st kings", "1 Kings"},
+		{"2 kings", "2 Kings"}, {"second kings", "2 Kings"}, {"2nd kings", "2 Kings"},
+		{"1 peter", "1 Peter"}, {"first peter", "1 Peter"}, {"1st peter", "1 Peter"},
+		{"2 peter", "2 Peter"}, {"second peter", "2 Peter"}, {"2nd peter", "2 Peter"},
+		{"1 john", "1 John"}, {"first john", "1 John"}, {"1st john", "1 John"},
+		{"2 john", "2 John"}, {"second john", "2 John"}, {"2nd john", "2 John"},
+		{"3 john", "3 John"}, {"third john", "3 John"}, {"3rd john", "3 John"},
+		{"revelations", "Revelation"}, {"revelation", "Revelation"},
+		{"psalms", "Psalms"}, {"psalm", "Psalms"},
+		{"genesis", "Genesis"}, {"exodus", "Exodus"}, {"leviticus", "Leviticus"},
+		{"numbers", "Numbers"}, {"deuteronomy", "Deuteronomy"}, {"joshua", "Joshua"},
+		{"judges", "Judges"}, {"ruth", "Ruth"}, {"ezra", "Ezra"}, {"nehemiah", "Nehemiah"},
+		{"esther", "Esther"}, {"job", "Job"}, {"proverbs", "Proverbs"},
+		{"ecclesiastes", "Ecclesiastes"}, {"isaiah", "Isaiah"}, {"jeremiah", "Jeremiah"},
+		{"lamentations", "Lamentations"}, {"ezekiel", "Ezekiel"}, {"daniel", "Daniel"},
+		{"hosea", "Hosea"}, {"joel", "Joel"}, {"amos", "Amos"}, {"obadiah", "Obadiah"},
+		{"jonah", "Jonah"}, {"micah", "Micah"}, {"nahum", "Nahum"}, {"habakkuk", "Habakkuk"},
+		{"zephaniah", "Zephaniah"}, {"haggai", "Haggai"}, {"zechariah", "Zechariah"},
+		{"malachi", "Malachi"}, {"matthew", "Matthew"}, {"mark", "Mark"},
+		{"luke", "Luke"}, {"john", "John"}, {"acts", "Acts"}, {"romans", "Romans"},
+		{"galatians", "Galatians"}, {"ephesians", "Ephesians"}, {"philippians", "Philippians"},
+		{"colossians", "Colossians"}, {"titus", "Titus"}, {"philemon", "Philemon"},
+		{"hebrews", "Hebrews"}, {"james", "James"}, {"jude", "Jude"}
+	};
+
+	for (const auto &b : kAliases) {
+		// Pattern 1: Standard [Book] [Chapter] [Verse] with connectors
+		QRegularExpression rx(QStringLiteral(
+			"\\b%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?(?:\\s*(?:[:,\-]|and\\s+(?:verse|v)?|from\\s+(?:verse|v)?|starting\\s+(?:at\\s+)?(?:verse|v)?|at\\s+(?:verse|v)?|verse|verses|v)?\\s*(\\d+))?"
+		).arg(QRegularExpression::escape(QString::fromUtf8(b.alias))));
+
 		QRegularExpressionMatch m = rx.match(text);
 		if (m.hasMatch()) {
 			int ch = m.captured(1).toInt();
@@ -509,13 +546,34 @@ void AudioEngine::detectScripture(const QString &rawTranscript)
 					m_lastSuggestionTime = now;
 					emit suggestionDetected(Channel::Scripture, ref,
 								QStringLiteral("Detected from audio"), 95);
-					return;
+					return true;
+				}
+			}
+		}
+
+		// Pattern 2: Inverted order: Verse [V] of [Book] [Chapter]
+		QRegularExpression rxInv(QStringLiteral(
+			"\\b(?:verse|verses|v)\\s*(\\d+)\\s*(?:of|in|from)\\s*%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?"
+		).arg(QRegularExpression::escape(QString::fromUtf8(b.alias))));
+
+		QRegularExpressionMatch mInv = rxInv.match(text);
+		if (mInv.hasMatch()) {
+			int vs = mInv.captured(1).toInt();
+			int ch = mInv.captured(2).toInt();
+			if (ch > 0 && vs > 0) {
+				QString ref = QStringLiteral("%1 %2:%3").arg(b.canonical).arg(ch).arg(vs);
+				if (ref != m_lastSuggestedRef) {
+					m_lastSuggestedRef = ref;
+					m_lastSuggestionTime = now;
+					emit suggestionDetected(Channel::Scripture, ref,
+								QStringLiteral("Detected from audio"), 95);
+					return true;
 				}
 			}
 		}
 	}
 
-	// Reverse quote lookup: check common preaching phrases
+	// Reverse quote lookup
 	static const struct {
 		const char *phrase;
 		const char *ref;
@@ -532,6 +590,14 @@ void AudioEngine::detectScripture(const QString &rawTranscript)
 		 "Trust in the Lord with all thine heart; and lean not unto thine own understanding."},
 		{"in the beginning god created", "Genesis 1:1",
 		 "In the beginning God created the heaven and the earth."},
+		{"be strong and courageous", "Joshua 1:9",
+		 "Be strong and of a good courage; be not afraid, neither be thou dismayed."},
+		{"the joy of the lord is your strength", "Nehemiah 8:10",
+		 "The joy of the LORD is your strength."},
+		{"by his stripes we are healed", "Isaiah 53:5",
+		 "With his stripes we are healed."},
+		{"if god be for us who can be against us", "Romans 8:31",
+		 "If God be for us, who can be against us?"}
 	};
 
 	for (const auto &q : kQuotes) {
@@ -541,54 +607,171 @@ void AudioEngine::detectScripture(const QString &rawTranscript)
 				m_lastSuggestedRef = ref;
 				m_lastSuggestionTime = now;
 				emit suggestionDetected(Channel::Scripture, ref, QString::fromUtf8(q.verse), 92);
-				return;
+				return true;
 			}
 		}
 	}
+
+	return false;
 }
 
-void AudioEngine::detectLyrics(const QString &rawTranscript)
+bool AudioEngine::detectLyrics(const QString &rawTranscript)
 {
 	uint64_t now = QDateTime::currentMSecsSinceEpoch();
-	if (now - m_lastSuggestionTime < 4500)
-		return;
+	if (now - m_lastSuggestionTime < 2500)
+		return false;
 
 	QString text = normalizeSpokenText(rawTranscript);
-	if (text.length() < 8)
-		return;
+	if (text.length() < 5)
+		return false;
+
+	QStringList transcriptWords = text.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+	if (transcriptWords.isEmpty())
+		return false;
+
+	static const QSet<QString> kStopWords = {
+		QStringLiteral("the"), QStringLiteral("and"), QStringLiteral("a"),
+		QStringLiteral("to"), QStringLiteral("in"), QStringLiteral("is"),
+		QStringLiteral("of"), QStringLiteral("that"), QStringLiteral("it"),
+		QStringLiteral("for"), QStringLiteral("on"), QStringLiteral("with"),
+		QStringLiteral("at"), QStringLiteral("by"), QStringLiteral("from"),
+		QStringLiteral("up"), QStringLiteral("an"), QStringLiteral("my"),
+		QStringLiteral("your"), QStringLiteral("we"), QStringLiteral("i")
+	};
+
+	struct Candidate {
+		QString songTitle;
+		QString sectionName;
+		QString sectionCode;
+		QString matchedLine;
+		int confidence = 0;
+	};
+
+	Candidate best;
 
 	const auto &songs = SongLibrary::instance().songs();
 	for (const auto &song : songs) {
 		QString normTitle = normalizeSpokenText(song.title);
-		if (!normTitle.isEmpty() && text.contains(normTitle)) {
-			QString ref = song.title.toUpper();
-			if (ref != m_lastSuggestedRef) {
-				m_lastSuggestedRef = ref;
-				m_lastSuggestionTime = now;
-				emit suggestionDetected(Channel::Lyrics, ref, song.title, 94);
-				return;
+
+		// Check 1: Direct Song Title match
+		if (!normTitle.isEmpty() && normTitle.length() >= 5) {
+			if (text.contains(normTitle)) {
+				Candidate c;
+				c.songTitle = song.title;
+				c.matchedLine = song.title;
+				c.confidence = 96;
+				if (c.confidence > best.confidence)
+					best = c;
 			}
 		}
 
+		// Check 2: Sections & Slides matching
 		for (const auto &sec : song.sections) {
 			for (const auto &slide : sec.rawSlides) {
 				for (const auto &line : slide) {
 					QString normLine = normalizeSpokenText(line);
-					if (normLine.length() >= 12 && text.contains(normLine)) {
-						QString ref = QStringLiteral("%1 · %2")
-								      .arg(song.title.toUpper())
-								      .arg(sec.name.toUpper());
-						if (ref != m_lastSuggestedRef) {
-							m_lastSuggestedRef = ref;
-							m_lastSuggestionTime = now;
-							emit suggestionDetected(Channel::Lyrics, ref, line, 90);
-							return;
+					if (normLine.length() < 6)
+						continue;
+
+					// A) Substring match (either direction)
+					if (text.length() >= 10 && normLine.contains(text)) {
+						Candidate c;
+						c.songTitle = song.title;
+						c.sectionName = sec.name;
+						c.sectionCode = sec.shortCode;
+						c.matchedLine = line;
+						c.confidence = 94;
+						if (c.confidence > best.confidence)
+							best = c;
+						continue;
+					}
+					if (normLine.length() >= 10 && text.contains(normLine)) {
+						Candidate c;
+						c.songTitle = song.title;
+						c.sectionName = sec.name;
+						c.sectionCode = sec.shortCode;
+						c.matchedLine = line;
+						c.confidence = 95;
+						if (c.confidence > best.confidence)
+							best = c;
+						continue;
+					}
+
+					// B) N-Gram / Phrase match: Check for 3 consecutive matching words
+					QStringList lineWords = normLine.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+					if (lineWords.size() >= 3 && transcriptWords.size() >= 3) {
+						bool ngramMatched = false;
+						for (int li = 0; li <= lineWords.size() - 3; ++li) {
+							if (kStopWords.contains(lineWords[li]) &&
+							    kStopWords.contains(lineWords[li + 1]) &&
+							    kStopWords.contains(lineWords[li + 2]))
+								continue;
+
+							QString trigram = QStringLiteral("%1 %2 %3")
+										  .arg(lineWords[li], lineWords[li + 1], lineWords[li + 2]);
+							if (text.contains(trigram)) {
+								Candidate c;
+								c.songTitle = song.title;
+								c.sectionName = sec.name;
+								c.sectionCode = sec.shortCode;
+								c.matchedLine = line;
+								c.confidence = 90;
+								if (c.confidence > best.confidence)
+									best = c;
+								ngramMatched = true;
+								break;
+							}
+						}
+						if (ngramMatched)
+							continue;
+					}
+
+					// C) Keyword Overlap match: Count shared significant words
+					int matchCount = 0;
+					int totalSig = 0;
+					for (const QString &w : lineWords) {
+						if (w.length() < 3 || kStopWords.contains(w))
+							continue;
+						totalSig++;
+						if (transcriptWords.contains(w))
+							matchCount++;
+					}
+
+					if (totalSig >= 3 && matchCount >= 3) {
+						float ratio = static_cast<float>(matchCount) / static_cast<float>(totalSig);
+						if (ratio >= 0.50f) {
+							int conf = 75 + static_cast<int>(ratio * 20.0f);
+							if (conf > best.confidence) {
+								best.songTitle = song.title;
+								best.sectionName = sec.name;
+								best.sectionCode = sec.shortCode;
+								best.matchedLine = line;
+								best.confidence = conf;
+							}
 						}
 					}
 				}
 			}
 		}
 	}
+
+	if (best.confidence >= 80) {
+		QString displayRef;
+		if (!best.sectionName.isEmpty()) {
+			displayRef = QStringLiteral("%1 · %2").arg(best.songTitle, best.sectionName);
+		} else {
+			displayRef = best.songTitle;
+		}
+
+		if (displayRef != m_lastSuggestedRef) {
+			m_lastSuggestedRef = displayRef;
+			m_lastSuggestionTime = now;
+			emit suggestionDetected(Channel::Lyrics, displayRef, best.songTitle, best.confidence);
+			return true;
+		}
+	}
+
+	return false;
 }
 
 // AudioMeterWidget Implementation

@@ -508,15 +508,22 @@ void LyricsDock::rebuildSectionButtons()
 
 void LyricsDock::jumpToSection(const QString &shortCode)
 {
+	const QString target = shortCode.trimmed().toUpper();
+	if (target.isEmpty())
+		return;
+
 	for (int row = 0; row < slideList->count(); row++) {
 		auto *item = slideList->item(row);
-		if (item->data(RoleSlideIndex).toInt() >= 0 &&
-		    item->data(RoleSectionCode).toString().toUpper() == shortCode.toUpper()) {
-			slideList->setCurrentRow(row);
-			slideList->scrollToItem(item, QAbstractItemView::PositionAtCenter);
-			if (live && follow)
-				pushToOutput();
-			break;
+		if (item->data(RoleSlideIndex).toInt() >= 0) {
+			const QString code = item->data(RoleSectionCode).toString().toUpper();
+			const QString name = item->data(RoleSectionName).toString().toUpper();
+			if (code == target || name == target || name.contains(target) || target.contains(name)) {
+				slideList->setCurrentRow(row);
+				slideList->scrollToItem(item, QAbstractItemView::PositionAtCenter);
+				if (live && follow)
+					pushToOutput();
+				break;
+			}
 		}
 	}
 }
