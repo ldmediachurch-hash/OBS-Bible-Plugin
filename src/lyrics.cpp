@@ -388,7 +388,7 @@ static Song parseJsonObjectToSong(const QJsonObject &obj)
 	}
 
 	if (!secArray.isEmpty()) {
-		for (const auto &item : secArray) {
+		for (const QJsonValue item : secArray) {
 			if (item.isObject()) {
 				const QJsonObject so = item.toObject();
 				SongSection sec;
