@@ -1,0 +1,14 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file>mic.svg</file>
+        <file>search.svg</file>
+        <file>gear.svg</file>
+        <file>plus.svg</file>
+        <file>minus.svg</file>
+        <file>open.svg</file>
+        <file>save.svg</file>
+        <file>prev.svg</file>
+        <file>next.svg</file>
+        <file>close.svg</file>
+    </qresource>
+</RCC>

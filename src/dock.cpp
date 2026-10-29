@@ -1,5 +1,5 @@
 /*
-LD Scripture for OBS
+LD Worship & Word for OBS
 Copyright (C) 2026 LD Media Church
 
 This program is free software; you can redistribute it and/or modify
@@ -9,7 +9,7 @@ the Free Software Foundation; either version 2 of the License, or
 */
 
 #include "dock.hpp"
-#include "display-state.hpp"
+#include "audio-engine.hpp"
 
 #include <obs-module.h>
 #include <obs.hpp>
@@ -26,6 +26,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
@@ -33,7 +34,11 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
+#include <QResizeEvent>
+#include <QStyledItemDelegate>
 #include <QTextStream>
 #include <QToolButton>
 #include <QUrl>
@@ -41,7 +46,13 @@ the Free Software Foundation; either version 2 of the License, or
 
 namespace {
 
-enum Roles { RoleBook = Qt::UserRole + 1, RoleChapter, RoleVerse };
+enum Roles {
+	RoleBook = Qt::UserRole + 1,
+	RoleChapter,
+	RoleVerse,
+	RoleIsLive,
+	RoleIsNext
+};
 
 QString configPath()
 {
@@ -70,695 +81,761 @@ const char kPrev[] = "prev";
 const char kLive[] = "goLive";
 const char kClear[] = "clearLive";
 
-// Arrow keys / Enter in the search box drive the results list.
-class SearchKeys : public QObject {
+// Delegate for Scripture Verse Cards (Mockup fidelity)
+class VerseCardDelegate : public QStyledItemDelegate {
 public:
-	SearchKeys(QListWidget *list, QObject *parent) : QObject(parent), results(list) {}
+	explicit VerseCardDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
 
-protected:
-	bool eventFilter(QObject *obj, QEvent *ev) override
+	void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
 	{
-		if (ev->type() == QEvent::KeyPress) {
-			auto *ke = static_cast<QKeyEvent *>(ev);
-			if (ke->key() == Qt::Key_Down || ke->key() == Qt::Key_Up) {
-				int row = results->currentRow() + (ke->key() == Qt::Key_Down ? 1 : -1);
-				if (row >= 0 && row < results->count())
-					results->setCurrentRow(row);
-				return true;
-			}
+		p->save();
+		p->setRenderHint(QPainter::Antialiasing, true);
+
+		QRect r = option.rect.adjusted(4, 3, -4, -3);
+		bool isSelected = option.state & QStyle::State_Selected;
+		bool isLive = index.data(RoleIsLive).toBool();
+		bool isNext = index.data(RoleIsNext).toBool();
+		int verseNum = index.data(RoleVerse).toInt();
+		QString text = index.data(Qt::DisplayRole).toString();
+
+		// Background
+		QPainterPath path;
+		path.addRoundedRect(r, 6, 6);
+		if (isSelected) {
+			p->fillPath(path, QColor(255, 255, 255, 18));
+		} else {
+			p->fillPath(path, QColor(255, 255, 255, 8));
 		}
-		return QObject::eventFilter(obj, ev);
+
+		// Border outline
+		if (isLive) {
+			// Solid white border
+			p->setPen(QPen(QColor(255, 255, 255), 2.0));
+			p->drawPath(path);
+		} else if (isNext) {
+			// Dashed border
+			QPen dashPen(QColor(255, 255, 255, 110), 1.5, Qt::DashLine);
+			p->setPen(dashPen);
+			p->drawPath(path);
+		} else {
+			p->setPen(QPen(QColor(255, 255, 255, 20), 1.0));
+			p->drawPath(path);
+		}
+
+		int contentTop = r.top() + 6;
+
+		// Verse number in small-caps slate
+		QFont numFont = option.font;
+		numFont.setPointSize(8);
+		numFont.setBold(true);
+		p->setFont(numFont);
+		p->setPen(QColor(140, 147, 160));
+		QString numStr = QStringLiteral("VERSE %1").arg(verseNum);
+		p->drawText(r.left() + 10, contentTop + 10, numStr);
+
+		// Live badge on top right
+		if (isLive) {
+			const int dotX = r.right() - 48;
+			const int dotY = contentTop + 6;
+			p->setPen(Qt::NoPen);
+			p->setBrush(QColor(255, 45, 45)); // #FF2D2D
+			p->drawEllipse(QPointF(dotX, dotY), 3.5, 3.5);
+
+			QFont liveFont = option.font;
+			liveFont.setPointSize(8);
+			liveFont.setBold(true);
+			p->setFont(liveFont);
+			p->setPen(QColor(255, 45, 45));
+			p->drawText(dotX + 7, dotY + 4, QStringLiteral("LIVE"));
+		}
+
+		// Verse text
+		QFont textFont = option.font;
+		textFont.setPointSize(9);
+		p->setFont(textFont);
+		p->setPen(QColor(240, 243, 246));
+
+		int textTop = contentTop + 18;
+		QRect textRect(r.left() + 10, textTop, r.width() - 20, r.bottom() - textTop - 4);
+		p->drawText(textRect, Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, text);
+
+		p->restore();
 	}
 
-private:
-	QListWidget *results;
+	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
+	{
+		return QSize(option.rect.width(), 62);
+	}
+};
+
+// Delegate for Service List (numbered rows)
+class ServiceListDelegate : public QStyledItemDelegate {
+public:
+	explicit ServiceListDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
+
+	void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+	{
+		p->save();
+		p->setRenderHint(QPainter::Antialiasing, true);
+
+		QRect r = option.rect.adjusted(2, 2, -2, -2);
+		bool isSelected = option.state & QStyle::State_Selected;
+
+		if (isSelected) {
+			QPainterPath path;
+			path.addRoundedRect(r, 4, 4);
+			p->fillPath(path, QColor(255, 255, 255, 16));
+			p->fillRect(QRect(r.left(), r.top() + 4, 2, r.height() - 8), Qt::white);
+		}
+
+		QString numStr = QString::number(index.row() + 1);
+		QString title = index.data(Qt::DisplayRole).toString();
+
+		// Number in muted slate
+		QFont numFont = option.font;
+		numFont.setPointSize(numFont.pointSize() - 1);
+		p->setFont(numFont);
+		p->setPen(QColor(130, 137, 150));
+		QRect numRect(r.left() + 6, r.top(), 22, r.height());
+		p->drawText(numRect, Qt::AlignLeft | Qt::AlignVCenter, numStr);
+
+		// Reference
+		QFont titleFont = option.font;
+		titleFont.setBold(isSelected);
+		p->setFont(titleFont);
+		p->setPen(isSelected ? Qt::white : QColor(220, 224, 230));
+		QRect titleRect(r.left() + 32, r.top(), r.width() - 38, r.height());
+		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
+
+		p->restore();
+	}
+
+	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
+	{
+		return QSize(option.rect.width(), 32);
+	}
 };
 
 } // namespace
 
-ScriptureDock::ScriptureDock(QWidget *parent) : QWidget(parent)
+ScriptureDock::ScriptureDock(QWidget *parent)
+	: QWidget(parent)
 {
-	setMinimumWidth(280);
-	auto *root = new QVBoxLayout(this);
-	root->setContentsMargins(6, 6, 6, 6);
-	root->setSpacing(6);
-
-	searchEdit = new QLineEdit(this);
-	searchEdit->setPlaceholderText(QStringLiteral("Rom 8:28, Psalm 23, or words…"));
-	searchEdit->setClearButtonEnabled(true);
-	root->addWidget(searchEdit);
-
-	auto *tRow = new QHBoxLayout();
-	primaryBox = new QComboBox(this);
-	primaryBox->setToolTip(QStringLiteral("Translation"));
-	secondaryBox = new QComboBox(this);
-	secondaryBox->setToolTip(QStringLiteral("Second translation shown alongside (optional)"));
-	auto *more = new QToolButton(this);
-	more->setText(QStringLiteral("Bibles"));
-	more->setPopupMode(QToolButton::InstantPopup);
-	auto *menu = new QMenu(more);
-	menu->addAction(QStringLiteral("Import Bible (XML or JSON)…"), this, &ScriptureDock::importBible);
-	menu->addAction(QStringLiteral("Remove an imported Bible…"), this, &ScriptureDock::removeBible);
-	menu->addSeparator();
-	menu->addAction(QStringLiteral("Open Bibles folder"), this, &ScriptureDock::openBiblesFolder);
-	more->setMenu(menu);
-	tRow->addWidget(primaryBox, 1);
-	tRow->addWidget(new QLabel(QStringLiteral("+"), this));
-	tRow->addWidget(secondaryBox, 1);
-	tRow->addWidget(more);
-	root->addLayout(tRow);
-
-	results = new QListWidget(this);
-	results->setUniformItemSizes(true);
-	results->setTextElideMode(Qt::ElideRight);
-	results->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	results->setWordWrap(false);
-	root->addWidget(results, 3);
-
-	preview = new QLabel(this);
-	preview->setWordWrap(true);
-	preview->setFrameShape(QFrame::StyledPanel);
-	preview->setMargin(8);
-	preview->setTextFormat(Qt::RichText);
-	preview->setMinimumHeight(70);
-	preview->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-	root->addWidget(preview, 2);
-
-	auto *ctl = new QHBoxLayout();
-	auto *prevBtn = new QPushButton(QStringLiteral("◀"), this);
-	prevBtn->setToolTip(QStringLiteral("Previous verse"));
-	liveButton = new QPushButton(QStringLiteral("Show"), this);
-	liveButton->setToolTip(QStringLiteral("Put the selected verse on screen"));
-	clearButton = new QPushButton(QStringLiteral("Clear"), this);
-	clearButton->setToolTip(QStringLiteral("Take the lower third off screen"));
-	auto *nextBtn = new QPushButton(QStringLiteral("▶"), this);
-	nextBtn->setToolTip(QStringLiteral("Next verse"));
-	prevBtn->setMaximumWidth(44);
-	nextBtn->setMaximumWidth(44);
-	ctl->addWidget(prevBtn);
-	ctl->addWidget(liveButton, 1);
-	ctl->addWidget(clearButton, 1);
-	ctl->addWidget(nextBtn);
-	root->addLayout(ctl);
-
-	auto *stRow = new QHBoxLayout();
-	liveBadge = new QLabel(this);
-	status = new QLabel(this);
-	status->setWordWrap(true);
-	QFont small = status->font();
-	small.setPointSizeF(small.pointSizeF() * 0.9);
-	status->setFont(small);
-	stRow->addWidget(liveBadge);
-	stRow->addWidget(status, 1);
-	root->addLayout(stRow);
-
-	auto *listHeader = new QLabel(QStringLiteral("<b>Service list</b>"), this);
-	root->addWidget(listHeader);
-	serviceList = new QListWidget(this);
-	serviceList->setDragDropMode(QAbstractItemView::InternalMove);
-	root->addWidget(serviceList, 2);
-	auto *lRow = new QHBoxLayout();
-	auto *addBtn = new QPushButton(QStringLiteral("Add"), this);
-	addBtn->setToolTip(QStringLiteral("Add the current passage to the service list"));
-	auto *remBtn = new QPushButton(QStringLiteral("Remove"), this);
-	auto *loadBtn = new QPushButton(QStringLiteral("Open…"), this);
-	auto *saveBtn = new QPushButton(QStringLiteral("Save…"), this);
-	lRow->addWidget(addBtn);
-	lRow->addWidget(remBtn);
-	lRow->addWidget(loadBtn);
-	lRow->addWidget(saveBtn);
-	root->addLayout(lRow);
-
-	searchEdit->installEventFilter(new SearchKeys(results, this));
-
-	connect(searchEdit, &QLineEdit::returnPressed, this, &ScriptureDock::runSearch);
-	connect(results, &QListWidget::currentRowChanged, this, &ScriptureDock::selectionChanged);
-	connect(results, &QListWidget::itemActivated, this, [this](QListWidgetItem *) { goLive(); });
-	connect(primaryBox, &QComboBox::currentIndexChanged, this, &ScriptureDock::translationChanged);
-	connect(secondaryBox, &QComboBox::currentIndexChanged, this, &ScriptureDock::translationChanged);
-	connect(prevBtn, &QPushButton::clicked, this, &ScriptureDock::prev);
-	connect(nextBtn, &QPushButton::clicked, this, &ScriptureDock::next);
-	connect(liveButton, &QPushButton::clicked, this, &ScriptureDock::goLive);
-	connect(clearButton, &QPushButton::clicked, this, &ScriptureDock::clearLive);
-	connect(addBtn, &QPushButton::clicked, this, &ScriptureDock::addToList);
-	connect(remBtn, &QPushButton::clicked, this, &ScriptureDock::removeFromList);
-	connect(loadBtn, &QPushButton::clicked, this, &ScriptureDock::loadList);
-	connect(saveBtn, &QPushButton::clicked, this, &ScriptureDock::saveList);
-	connect(serviceList, &QListWidget::itemActivated, this, &ScriptureDock::openListItem);
-
+	setMinimumWidth(300);
+	setupLayout();
 	registerHotkeys();
+	refreshTranslations(QStringLiteral("KJV"), QString());
 	loadConfig();
-	updatePreview();
 }
 
 ScriptureDock::~ScriptureDock()
 {
-	if (obs_initialized()) {
-		for (obs_hotkey_id id : {hkNext, hkPrev, hkLive, hkClear}) {
-			if (id != OBS_INVALID_HOTKEY_ID)
-				obs_hotkey_unregister(id);
+	saveConfig();
+	if (hkNext != OBS_INVALID_HOTKEY_ID)
+		obs_hotkey_unregister(hkNext);
+	if (hkPrev != OBS_INVALID_HOTKEY_ID)
+		obs_hotkey_unregister(hkPrev);
+	if (hkLive != OBS_INVALID_HOTKEY_ID)
+		obs_hotkey_unregister(hkLive);
+	if (hkClear != OBS_INVALID_HOTKEY_ID)
+		obs_hotkey_unregister(hkClear);
+}
+
+void ScriptureDock::setupLayout()
+{
+	auto *root = new QVBoxLayout(this);
+	root->setContentsMargins(6, 6, 6, 6);
+	root->setSpacing(6);
+
+	// 1. Search + Translations + Gear Row
+	auto *searchRow = new QHBoxLayout();
+	searchRow->setSpacing(6);
+
+	searchEdit = new QLineEdit(this);
+	searchEdit->setPlaceholderText(QStringLiteral("Rom 8:28, Psalm 23, or words"));
+	searchEdit->setClearButtonEnabled(true);
+	searchRow->addWidget(searchEdit, 2);
+
+	primaryBox = new QComboBox(this);
+	primaryBox->setToolTip(QStringLiteral("Primary Translation"));
+	primaryBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+	searchRow->addWidget(primaryBox, 1);
+
+	secondaryBox = new QComboBox(this);
+	secondaryBox->setToolTip(QStringLiteral("Secondary Translation (Optional)"));
+	secondaryBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+	searchRow->addWidget(secondaryBox, 1);
+
+	gearBtn = new QToolButton(this);
+	gearBtn->setIcon(QIcon(QStringLiteral(":/icons/gear.svg")));
+	gearBtn->setToolTip(QStringLiteral("Settings & Bible Options"));
+	gearBtn->setFixedSize(30, 30);
+	connect(gearBtn, &QToolButton::clicked, this, &ScriptureDock::openGearMenu);
+	searchRow->addWidget(gearBtn);
+
+	root->addLayout(searchRow);
+
+	// 2. Responsive 2-column or 1-column container
+	m_topLayout = new QHBoxLayout();
+	m_topLayout->setSpacing(8);
+
+	m_leftColumn = new QWidget(this);
+	m_leftLayout = new QVBoxLayout(m_leftColumn);
+	m_leftLayout->setContentsMargins(0, 0, 0, 0);
+	m_leftLayout->setSpacing(6);
+
+	m_rightColumn = new QWidget(this);
+	m_rightLayout = new QVBoxLayout(m_rightColumn);
+	m_rightLayout->setContentsMargins(0, 0, 0, 0);
+	m_rightLayout->setSpacing(6);
+
+	QFont hFont = font();
+	hFont.setPointSize(8);
+	hFont.setBold(true);
+	hFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
+
+	// --- Left Column: Service List ---
+	auto *serviceHeaderRow = new QHBoxLayout();
+	serviceHeaderLabel = new QLabel(QStringLiteral("SERVICE LIST · 0"), m_leftColumn);
+	serviceHeaderLabel->setFont(hFont);
+	serviceHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
+	serviceHeaderRow->addWidget(serviceHeaderLabel, 1);
+
+	serviceAddBtn = new QToolButton(m_leftColumn);
+	serviceAddBtn->setIcon(QIcon(QStringLiteral(":/icons/plus.svg")));
+	serviceAddBtn->setToolTip(QStringLiteral("Add current scripture to service list"));
+	connect(serviceAddBtn, &QToolButton::clicked, this, &ScriptureDock::addToList);
+	serviceHeaderRow->addWidget(serviceAddBtn);
+
+	serviceRemBtn = new QToolButton(m_leftColumn);
+	serviceRemBtn->setIcon(QIcon(QStringLiteral(":/icons/minus.svg")));
+	serviceRemBtn->setToolTip(QStringLiteral("Remove selected scripture from service list"));
+	connect(serviceRemBtn, &QToolButton::clicked, this, &ScriptureDock::removeFromList);
+	serviceHeaderRow->addWidget(serviceRemBtn);
+
+	serviceUpBtn = new QToolButton(m_leftColumn);
+	serviceUpBtn->setIcon(QIcon(QStringLiteral(":/icons/prev.svg")));
+	serviceUpBtn->setToolTip(QStringLiteral("Move up in service list"));
+	connect(serviceUpBtn, &QToolButton::clicked, this, &ScriptureDock::moveListItemUp);
+	serviceHeaderRow->addWidget(serviceUpBtn);
+
+	serviceDownBtn = new QToolButton(m_leftColumn);
+	serviceDownBtn->setIcon(QIcon(QStringLiteral(":/icons/next.svg")));
+	serviceDownBtn->setToolTip(QStringLiteral("Move down in service list"));
+	connect(serviceDownBtn, &QToolButton::clicked, this, &ScriptureDock::moveListItemDown);
+	serviceHeaderRow->addWidget(serviceDownBtn);
+
+	m_leftLayout->addLayout(serviceHeaderRow);
+
+	serviceList = new QListWidget(m_leftColumn);
+	serviceList->setItemDelegate(new ServiceListDelegate(serviceList));
+	serviceList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	serviceList->setMinimumHeight(120);
+	m_leftLayout->addWidget(serviceList, 1);
+
+	// --- Right Column: Verses + Thumbnail + Controls ---
+	auto *versesHeaderRow = new QHBoxLayout();
+	versesHeaderLabel = new QLabel(QStringLiteral("VERSES"), m_rightColumn);
+	versesHeaderLabel->setFont(hFont);
+	versesHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
+	versesHeaderRow->addWidget(versesHeaderLabel, 1);
+	m_rightLayout->addLayout(versesHeaderRow);
+
+	results = new QListWidget(m_rightColumn);
+	results->setItemDelegate(new VerseCardDelegate(results));
+	results->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	m_rightLayout->addWidget(results, 3);
+
+	// 16:9 Mini Program Thumbnail
+	thumbnail = new MiniProgramThumbnail(m_rightColumn);
+	m_rightLayout->addWidget(thumbnail, 2);
+
+	// Sticky Bottom Control Bar
+	auto *ctlRow = new QHBoxLayout();
+	ctlRow->setSpacing(6);
+
+	prevBtn = new QPushButton(QStringLiteral("◀"), m_rightColumn);
+	prevBtn->setToolTip(QStringLiteral("Previous Verse (Shift+Space)"));
+	prevBtn->setFixedHeight(34);
+	prevBtn->setMaximumWidth(40);
+	connect(prevBtn, &QPushButton::clicked, this, &ScriptureDock::prev);
+	ctlRow->addWidget(prevBtn);
+
+	liveButton = new QPushButton(QStringLiteral("On screen"), m_rightColumn);
+	liveButton->setObjectName(QStringLiteral("PrimaryShowBtn"));
+	liveButton->setStyleSheet(QStringLiteral(
+		"QPushButton#PrimaryShowBtn { background-color: #FFFFFF; color: #0F1115; font-weight: bold; border-radius: 6px; padding: 6px 14px; border: none; font-size: 13px; } "
+		"QPushButton#PrimaryShowBtn:hover { background-color: #E2E8F0; } "
+		"QPushButton#PrimaryShowBtn:pressed { background-color: #CBD5E1; }"));
+	liveButton->setToolTip(QStringLiteral("Show selected verse on screen (Enter)"));
+	liveButton->setFixedHeight(34);
+	connect(liveButton, &QPushButton::clicked, this, &ScriptureDock::goLive);
+	ctlRow->addWidget(liveButton, 2);
+
+	clearButton = new QPushButton(QStringLiteral("Clear"), m_rightColumn);
+	clearButton->setToolTip(QStringLiteral("Take scripture off screen (Esc)"));
+	clearButton->setFixedHeight(34);
+	connect(clearButton, &QPushButton::clicked, this, &ScriptureDock::clearLive);
+	ctlRow->addWidget(clearButton, 1);
+
+	nextBtn = new QPushButton(QStringLiteral("▶"), m_rightColumn);
+	nextBtn->setToolTip(QStringLiteral("Next Verse (Space)"));
+	nextBtn->setFixedHeight(34);
+	nextBtn->setMaximumWidth(40);
+	connect(nextBtn, &QPushButton::clicked, this, &ScriptureDock::next);
+	ctlRow->addWidget(nextBtn);
+
+	m_rightLayout->addLayout(ctlRow);
+
+	// Shortcut hint
+	shortcutHintLabel = new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · Esc clear"), m_rightColumn);
+	QFont hintFont = font();
+	hintFont.setPointSize(8);
+	shortcutHintLabel->setFont(hintFont);
+	shortcutHintLabel->setAlignment(Qt::AlignCenter);
+	shortcutHintLabel->setStyleSheet(QStringLiteral("color: #717886;"));
+	m_rightLayout->addWidget(shortcutHintLabel);
+
+	// Assemble layout into root
+	m_topLayout->addWidget(m_leftColumn, 1);
+	m_topLayout->addWidget(m_rightColumn, 1);
+	root->addLayout(m_topLayout, 1);
+
+	// Connect signals
+	connect(searchEdit, &QLineEdit::returnPressed, this, &ScriptureDock::runSearch);
+	connect(primaryBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+		&ScriptureDock::translationChanged);
+	connect(secondaryBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+		&ScriptureDock::translationChanged);
+	connect(results, &QListWidget::currentRowChanged, this, &ScriptureDock::selectionChanged);
+	connect(serviceList, &QListWidget::itemDoubleClicked, this, &ScriptureDock::openListItem);
+}
+
+void ScriptureDock::resizeEvent(QResizeEvent *event)
+{
+	QWidget::resizeEvent(event);
+	bool wide = width() > 620;
+	if (wide != m_isWideLayout) {
+		updateResponsiveLayout(wide);
+	}
+}
+
+void ScriptureDock::updateResponsiveLayout(bool wide)
+{
+	m_isWideLayout = wide;
+	if (wide) {
+		m_leftColumn->setVisible(true);
+		m_rightColumn->setVisible(true);
+		m_topLayout->setDirection(QBoxLayout::LeftToRight);
+	} else {
+		m_leftColumn->setVisible(true);
+		m_rightColumn->setVisible(true);
+		m_topLayout->setDirection(QBoxLayout::TopToBottom);
+	}
+}
+
+void ScriptureDock::keyPressEvent(QKeyEvent *event)
+{
+	switch (event->key()) {
+	case Qt::Key_Space:
+		if (event->modifiers() & Qt::ShiftModifier) {
+			prev();
+		} else {
+			next();
 		}
+		event->accept();
+		return;
+	case Qt::Key_Return:
+	case Qt::Key_Enter:
+		goLive();
+		event->accept();
+		return;
+	case Qt::Key_Escape:
+		clearLive();
+		event->accept();
+		return;
+	default:
+		break;
 	}
+	QWidget::keyPressEvent(event);
 }
 
-void ScriptureDock::registerHotkeys()
+void ScriptureDock::openGearMenu()
 {
-	hkNext = obs_hotkey_register_frontend("ld_scripture.next", "LD Scripture: Next verse", hotkeyCallback<kNext>,
-					      this);
-	hkPrev = obs_hotkey_register_frontend("ld_scripture.prev", "LD Scripture: Previous verse",
-					      hotkeyCallback<kPrev>, this);
-	hkLive = obs_hotkey_register_frontend("ld_scripture.show", "LD Scripture: Show", hotkeyCallback<kLive>, this);
-	hkClear =
-		obs_hotkey_register_frontend("ld_scripture.clear", "LD Scripture: Clear", hotkeyCallback<kClear>, this);
-}
-
-/* ------------------------------------------------------------------ config */
-
-void ScriptureDock::loadConfig()
-{
-	OBSDataAutoRelease cfg = obs_data_create_from_json_file_safe(configPath().toUtf8().constData(), "bak");
-	QString p, s;
-	if (cfg) {
-		p = QString::fromUtf8(obs_data_get_string(cfg, "primary"));
-		s = QString::fromUtf8(obs_data_get_string(cfg, "secondary"));
-		OBSDataArrayAutoRelease list = obs_data_get_array(cfg, "service_list");
-		for (size_t i = 0; i < obs_data_array_count(list); i++) {
-			OBSDataAutoRelease item = obs_data_array_item(list, i);
-			serviceList->addItem(QString::fromUtf8(obs_data_get_string(item, "ref")));
-		}
-		const std::pair<obs_hotkey_id, const char *> keys[] = {{hkNext, "hk_next"},
-								       {hkPrev, "hk_prev"},
-								       {hkLive, "hk_show"},
-								       {hkClear, "hk_clear"}};
-		for (const auto &k : keys) {
-			OBSDataArrayAutoRelease arr = obs_data_get_array(cfg, k.second);
-			if (arr)
-				obs_hotkey_load(k.first, arr);
-		}
-	}
-	refreshTranslations(p, s);
-	status->setText(QStringLiteral("Type a reference and press Enter."));
-}
-
-void ScriptureDock::saveConfig()
-{
-	ensureConfigDir();
-	OBSDataAutoRelease cfg = obs_data_create();
-	if (auto b = primary())
-		obs_data_set_string(cfg, "primary", b->abbrev.toUtf8().constData());
-	if (auto b = secondary())
-		obs_data_set_string(cfg, "secondary", b->abbrev.toUtf8().constData());
-	OBSDataArrayAutoRelease list = obs_data_array_create();
-	for (int i = 0; i < serviceList->count(); i++) {
-		OBSDataAutoRelease item = obs_data_create();
-		obs_data_set_string(item, "ref", serviceList->item(i)->text().toUtf8().constData());
-		obs_data_array_push_back(list, item);
-	}
-	obs_data_set_array(cfg, "service_list", list);
-	const std::pair<obs_hotkey_id, const char *> keys[] = {{hkNext, "hk_next"},
-							       {hkPrev, "hk_prev"},
-							       {hkLive, "hk_show"},
-							       {hkClear, "hk_clear"}};
-	for (const auto &k : keys) {
-		OBSDataArrayAutoRelease arr = obs_hotkey_save(k.first);
-		obs_data_set_array(cfg, k.second, arr);
-	}
-	obs_data_save_json_safe(cfg, configPath().toUtf8().constData(), "tmp", "bak");
-}
-
-/* ------------------------------------------------------------------ translations */
-
-BiblePtr ScriptureDock::primary() const
-{
-	return BibleLibrary::instance().byAbbrev(primaryBox->currentData().toString());
-}
-
-BiblePtr ScriptureDock::secondary() const
-{
-	const QString a = secondaryBox->currentData().toString();
-	return a.isEmpty() ? nullptr : BibleLibrary::instance().byAbbrev(a);
+	auto *menu = new QMenu(this);
+	menu->addAction(QStringLiteral("Import Bible (XML or JSON)…"), this, &ScriptureDock::importBible);
+	menu->addAction(QStringLiteral("Remove Custom Bible…"), this, &ScriptureDock::removeBible);
+	menu->addSeparator();
+	menu->addAction(QStringLiteral("Open Bibles Folder"), this, &ScriptureDock::openBiblesFolder);
+	menu->exec(gearBtn->mapToGlobal(QPoint(0, gearBtn->height())));
 }
 
 void ScriptureDock::refreshTranslations(const QString &primaryAbbrev, const QString &secondaryAbbrev)
 {
-	QSignalBlocker b1(primaryBox), b2(secondaryBox);
+	primaryBox->blockSignals(true);
+	secondaryBox->blockSignals(true);
+
 	primaryBox->clear();
 	secondaryBox->clear();
-	secondaryBox->addItem(QStringLiteral("None"), QString());
-	for (const auto &b : BibleLibrary::instance().bibles()) {
-		primaryBox->addItem(b->abbrev, b->abbrev);
-		primaryBox->setItemData(primaryBox->count() - 1, b->name, Qt::ToolTipRole);
-		secondaryBox->addItem(b->abbrev, b->abbrev);
-		secondaryBox->setItemData(secondaryBox->count() - 1, b->name, Qt::ToolTipRole);
+	secondaryBox->addItem(QStringLiteral("(None)"), QStringLiteral(""));
+
+	auto bibles = BibleLibrary::instance().bibles();
+	for (const auto &b : bibles) {
+		QString label = QStringLiteral("%1 (%2)").arg(b->name, b->abbrev);
+		primaryBox->addItem(label, b->abbrev);
+		secondaryBox->addItem(label, b->abbrev);
 	}
-	int pi = primaryBox->findData(primaryAbbrev);
-	primaryBox->setCurrentIndex(pi >= 0 ? pi : 0);
-	int si = secondaryBox->findData(secondaryAbbrev);
-	secondaryBox->setCurrentIndex(si >= 0 ? si : 0);
+
+	int pIdx = primaryBox->findData(primaryAbbrev);
+	primaryBox->setCurrentIndex(pIdx >= 0 ? pIdx : 0);
+
+	int sIdx = secondaryBox->findData(secondaryAbbrev);
+	secondaryBox->setCurrentIndex(sIdx >= 0 ? sIdx : 0);
+
+	primaryBox->blockSignals(false);
+	secondaryBox->blockSignals(false);
+}
+
+BiblePtr ScriptureDock::primary() const
+{
+	QString abbrev = primaryBox->currentData().toString();
+	return BibleLibrary::instance().byAbbrev(abbrev);
+}
+
+BiblePtr ScriptureDock::secondary() const
+{
+	QString abbrev = secondaryBox->currentData().toString();
+	return BibleLibrary::instance().byAbbrev(abbrev);
 }
 
 void ScriptureDock::translationChanged()
 {
-	VerseRef v = currentVerse();
-	if (v.book > 0 && !searchIsKeyword)
-		setChapter(v.book, v.chapter, v.verse);
 	updatePreview();
-	if (live && follow)
+	if (live)
 		pushToOutput();
-	saveConfig();
 }
-
-/* ------------------------------------------------------------------ search */
 
 void ScriptureDock::runSearch()
 {
-	// a new search never changes what's on screen until Show is pressed
-	follow = false;
-	listIndex = -1;
-	serviceList->clearSelection();
-	showQuery(searchEdit->text(), false);
+	QString query = searchEdit->text().trimmed();
+	if (query.isEmpty())
+		return;
+	showQuery(query, false);
 }
 
 bool ScriptureDock::showQuery(const QString &query, bool fromList)
 {
-	auto bible = primary();
-	if (!bible)
+	auto b = primary();
+	if (!b)
 		return false;
-	QApplication::setOverrideCursor(Qt::WaitCursor);
-	QString err;
-	const bool ok = bible->ensureLoaded(&err);
-	QApplication::restoreOverrideCursor();
-	if (!ok) {
-		status->setText(err);
-		return false;
-	}
-	auto &lib = BibleLibrary::instance();
-	ParsedRef r = lib.parse(query, bible.get());
-	if (r.valid) {
-		if (!bible->book(r.book)) {
-			status->setText(
-				QStringLiteral("%1 isn't in %2.").arg(Canon::englishName(r.book), bible->abbrev));
-			return false;
-		}
-		if (r.chapter < 1 || r.chapter > bible->chapterCount(r.book)) {
-			status->setText(QStringLiteral("%1 has %2 chapters.")
-						.arg(lib.bookName(bible.get(), r.book))
-						.arg(bible->chapterCount(r.book)));
-			return false;
-		}
-		const int count = bible->verseCount(r.book, r.chapter);
-		if (r.v1 > count) {
-			status->setText(QStringLiteral("%1 has %2 verses.")
-						.arg(lib.formatRef(bible.get(), r.book, r.chapter, 0))
-						.arg(count));
-			return false;
-		}
+
+	ParsedRef parsed = BibleLibrary::instance().parse(query, b.get());
+	if (parsed.valid) {
 		searchIsKeyword = false;
-		rangeEnd = (fromList && r.v2 > r.v1) ? r.v2 : 0;
-		setChapter(r.book, r.chapter, r.v1 > 0 ? r.v1 : 1);
-		status->setText(r.v2 > r.v1 && r.v1 > 0
-					? QStringLiteral("Showing %1. Use ▶ to step through.")
-						  .arg(lib.formatRef(bible.get(), r.book, r.chapter, r.v1, r.v2))
-					: QString());
-		results->setFocus();
+		setChapter(parsed.book, parsed.chapter, parsed.v1 > 0 ? parsed.v1 : 1);
+		if (fromList && parsed.v2 > parsed.v1) {
+			rangeEnd = parsed.v2;
+		} else {
+			rangeEnd = 0;
+		}
 		return true;
 	}
-	if (query.trimmed().size() < 3) {
-		status->setText(QStringLiteral("Couldn't read that reference."));
+
+	// Keyword search
+	auto hits = BibleLibrary::instance().search(b.get(), query, 50);
+	if (hits.empty())
 		return false;
-	}
-	QApplication::setOverrideCursor(Qt::WaitCursor);
-	const auto found = lib.search(bible.get(), query, 300);
-	QApplication::restoreOverrideCursor();
+
 	searchIsKeyword = true;
-	rangeEnd = 0;
 	results->clear();
-	for (const auto &v : found) {
-		QString t = bible->verse(v.book, v.chapter, v.verse);
-		auto *item = new QListWidgetItem(
-			QStringLiteral("%1  %2").arg(lib.formatRef(bible.get(), v.book, v.chapter, v.verse), t),
-			results);
-		item->setData(RoleBook, v.book);
-		item->setData(RoleChapter, v.chapter);
-		item->setData(RoleVerse, v.verse);
-		item->setToolTip(t);
+	for (const auto &ref : hits) {
+		auto *item = new QListWidgetItem();
+		QString t = b->verse(ref.book, ref.chapter, ref.verse);
+		item->setText(t);
+		item->setData(RoleBook, ref.book);
+		item->setData(RoleChapter, ref.chapter);
+		item->setData(RoleVerse, ref.verse);
+		item->setData(RoleIsLive, false);
+		item->setData(RoleIsNext, false);
+		results->addItem(item);
 	}
-	status->setText(found.empty() ? QStringLiteral("No verses found for “%1”.").arg(query.trimmed())
-				      : QStringLiteral("%1 verse%2 found%3.")
-						.arg(found.size())
-						.arg(found.size() == 1 ? QString() : QStringLiteral("s"))
-						.arg(found.size() >= 300 ? QStringLiteral(" (first 300)") : QString()));
-	if (!found.empty()) {
+
+	if (results->count() > 0) {
 		results->setCurrentRow(0);
-		results->setFocus();
 	}
-	return !found.empty();
+	return true;
 }
 
 void ScriptureDock::setChapter(int book, int chapter, int selectVerse)
 {
-	auto bible = primary();
-	if (!bible || !bible->ensureLoaded())
+	auto b = primary();
+	if (!b)
 		return;
-	QSignalBlocker block(results);
+	b->ensureLoaded();
+
 	results->clear();
-	const int count = bible->verseCount(book, chapter);
-	for (int v = 1; v <= count; v++) {
-		QString t = bible->verse(book, chapter, v);
-		auto *item = new QListWidgetItem(QStringLiteral("%1  %2").arg(v).arg(t), results);
+	int count = b->verseCount(book, chapter);
+	int selectRow = 0;
+
+	for (int v = 1; v <= count; ++v) {
+		auto *item = new QListWidgetItem();
+		item->setText(b->verse(book, chapter, v));
 		item->setData(RoleBook, book);
 		item->setData(RoleChapter, chapter);
 		item->setData(RoleVerse, v);
-		item->setToolTip(t);
+		item->setData(RoleIsLive, false);
+		item->setData(RoleIsNext, false);
+
+		if (v == selectVerse) {
+			selectRow = v - 1;
+		}
+		results->addItem(item);
 	}
-	if (count == 0) {
-		status->setText(QStringLiteral("%1 doesn't have that chapter.").arg(bible->abbrev));
+
+	if (results->count() > 0) {
+		results->setCurrentRow(selectRow);
 	}
-	block.unblock();
-	results->setCurrentRow(std::max(0, std::min(selectVerse, count) - 1));
-	results->scrollToItem(results->currentItem(), QAbstractItemView::PositionAtCenter);
 }
 
 VerseRef ScriptureDock::currentVerse() const
 {
-	VerseRef v;
-	if (auto *item = results->currentItem()) {
-		v.book = item->data(RoleBook).toInt();
-		v.chapter = item->data(RoleChapter).toInt();
-		v.verse = item->data(RoleVerse).toInt();
+	VerseRef ref;
+	auto *item = results->currentItem();
+	if (item) {
+		ref.book = item->data(RoleBook).toInt();
+		ref.chapter = item->data(RoleChapter).toInt();
+		ref.verse = item->data(RoleVerse).toInt();
 	}
-	return v;
+	return ref;
 }
 
 void ScriptureDock::selectionChanged()
 {
-	updatePreview();
-	if (live && follow)
-		pushToOutput();
+	int curRow = results->currentRow();
+	for (int i = 0; i < results->count(); ++i) {
+		results->item(i)->setData(RoleIsNext, (i == curRow + 1));
+	}
+	results->viewport()->update();
+
 	updateLiveButton();
+	updatePreview();
+
+	if (live && follow) {
+		pushToOutput();
+	}
 }
 
 void ScriptureDock::updateLiveButton()
 {
-	if (live && follow) {
-		liveBadge->setText(QStringLiteral("<span style='color:#FF2D2D'>●</span> <b>LIVE</b>"));
-		liveButton->setText(QStringLiteral("On screen"));
-	} else if (live) {
-		liveBadge->setText(QStringLiteral("<span style='color:#FF2D2D'>●</span> <b>LIVE</b>"));
-		liveButton->setText(QStringLiteral("Show this"));
+	if (live) {
+		liveButton->setText(QStringLiteral("● On screen"));
 	} else {
-		liveBadge->clear();
-		liveButton->setText(QStringLiteral("Show"));
+		liveButton->setText(QStringLiteral("On screen"));
 	}
 }
 
 void ScriptureDock::updatePreview()
 {
-	const VerseRef v = currentVerse();
-	auto p = primary();
-	if (v.book == 0 || !p) {
-		preview->setText(QStringLiteral("<span style='color:gray'>The selected verse appears here.</span>"));
-		return;
-	}
-	auto &lib = BibleLibrary::instance();
-	QString html =
-		QStringLiteral("<b>%1</b>").arg(lib.formatRef(p.get(), v.book, v.chapter, v.verse).toHtmlEscaped());
-	auto add = [&](const BiblePtr &b) {
-		if (!b)
-			return;
-		b->ensureLoaded();
-		QString t = b->verse(v.book, v.chapter, v.verse);
-		if (t.isEmpty())
-			t = QStringLiteral("(not in %1)").arg(b->abbrev);
-		html += QStringLiteral("<br><span style='color:gray'>%1</span> %2")
-				.arg(b->abbrev.toHtmlEscaped(), t.toHtmlEscaped());
-	};
-	add(p);
-	add(secondary());
-	preview->setText(html);
-}
+	VerseRef ref = currentVerse();
+	auto b1 = primary();
+	auto b2 = secondary();
 
-/* ------------------------------------------------------------------ output */
+	DisplayContent content;
+	if (ref.book > 0 && b1) {
+		content.reference = BibleLibrary::instance().formatRef(b1.get(), ref.book, ref.chapter, ref.verse);
+		content.visible = true;
 
-void ScriptureDock::pushToOutput()
-{
-	const VerseRef v = currentVerse();
-	auto p = primary();
-	if (v.book == 0 || !p)
-		return;
-	auto &lib = BibleLibrary::instance();
-	DisplayContent c;
-	c.visible = live;
-	c.reference = lib.formatRef(p.get(), v.book, v.chapter, v.verse);
-	c.entries.push_back({p->abbrev, p->verse(v.book, v.chapter, v.verse)});
-	if (auto s = secondary()) {
-		s->ensureLoaded();
-		c.entries.push_back({s->abbrev, s->verse(v.book, v.chapter, v.verse)});
+		DisplayEntry e1;
+		e1.text = b1->verse(ref.book, ref.chapter, ref.verse);
+		e1.label = b1->abbrev;
+		content.entries.push_back(e1);
+
+		if (b2) {
+			b2->ensureLoaded();
+			DisplayEntry e2;
+			e2.text = b2->verse(ref.book, ref.chapter, ref.verse);
+			e2.label = b2->abbrev;
+			content.entries.push_back(e2);
+		}
+	} else {
+		content.visible = false;
 	}
-	DisplayState::get().set(c);
+
+	thumbnail->updateContent(content, live);
 }
 
 void ScriptureDock::goLive()
 {
-	if (currentVerse().book == 0) {
-		status->setText(QStringLiteral("Search for a verse first."));
-		return;
+	if (results->currentRow() < 0 && results->count() > 0) {
+		results->setCurrentRow(0);
 	}
+
 	live = true;
-	follow = true;
+	int cur = results->currentRow();
+	for (int i = 0; i < results->count(); ++i) {
+		results->item(i)->setData(RoleIsLive, (i == cur));
+	}
+	results->viewport()->update();
+
 	pushToOutput();
 	updateLiveButton();
+	updatePreview();
 }
 
 void ScriptureDock::clearLive()
 {
 	live = false;
-	follow = false;
-	DisplayState::get().setVisible(false);
+	for (int i = 0; i < results->count(); ++i) {
+		results->item(i)->setData(RoleIsLive, false);
+	}
+	results->viewport()->update();
+
+	DisplayState::instance().setLiveContent(Channel::Scripture, DisplayContent());
 	updateLiveButton();
+	updatePreview();
+}
+
+void ScriptureDock::pushToOutput()
+{
+	if (!live)
+		return;
+
+	VerseRef ref = currentVerse();
+	auto b1 = primary();
+	auto b2 = secondary();
+
+	if (ref.book > 0 && b1) {
+		DisplayContent content;
+		content.reference = BibleLibrary::instance().formatRef(b1.get(), ref.book, ref.chapter, ref.verse);
+		content.visible = true;
+
+		DisplayEntry e1;
+		e1.text = b1->verse(ref.book, ref.chapter, ref.verse);
+		e1.label = b1->abbrev;
+		content.entries.push_back(e1);
+
+		if (b2) {
+			b2->ensureLoaded();
+			DisplayEntry e2;
+			e2.text = b2->verse(ref.book, ref.chapter, ref.verse);
+			e2.label = b2->abbrev;
+			content.entries.push_back(e2);
+		}
+
+		DisplayState::instance().setLiveContent(Channel::Scripture, content);
+	}
 }
 
 void ScriptureDock::next()
 {
-	int row = results->currentRow();
-	// end of a service-list range ("1 Corinthians 13:4-7") -> next item on the list
-	if (listIndex >= 0 && rangeEnd > 0 && currentVerse().verse >= rangeEnd &&
-	    listIndex + 1 < serviceList->count()) {
+	int cur = results->currentRow();
+	if (cur + 1 < results->count()) {
+		results->setCurrentRow(cur + 1);
+		if (live)
+			goLive();
+	} else if (listIndex >= 0 && listIndex + 1 < serviceList->count()) {
 		openListIndex(listIndex + 1, false);
-		return;
+		if (live)
+			goLive();
 	}
-	if (row + 1 < results->count()) {
-		results->setCurrentRow(row + 1);
-		results->scrollToItem(results->currentItem());
-		return;
-	}
-	if (listIndex >= 0)
-		openListIndex(listIndex + 1, false);
 }
 
 void ScriptureDock::prev()
 {
-	int row = results->currentRow();
-	if (row > 0) {
-		results->setCurrentRow(row - 1);
-		results->scrollToItem(results->currentItem());
-		return;
-	}
-	if (listIndex > 0)
+	int cur = results->currentRow();
+	if (cur > 0) {
+		results->setCurrentRow(cur - 1);
+		if (live)
+			goLive();
+	} else if (listIndex > 0) {
 		openListIndex(listIndex - 1, true);
-}
-
-/* ------------------------------------------------------------------ service list */
-
-bool ScriptureDock::openListIndex(int index, bool fromEnd)
-{
-	Q_UNUSED(fromEnd);
-	if (index < 0 || index >= serviceList->count())
-		return false;
-	listIndex = index;
-	serviceList->clearSelection();
-	serviceList->setCurrentRow(index);
-	searchEdit->setText(serviceList->item(index)->text());
-	return showQuery(serviceList->item(index)->text(), true);
-}
-
-void ScriptureDock::openListItem(QListWidgetItem *item)
-{
-	follow = false; // opening a list item prepares it; Show puts it on screen
-	openListIndex(serviceList->row(item), false);
-	updateLiveButton();
+		if (live)
+			goLive();
+	}
 }
 
 void ScriptureDock::addToList()
 {
-	const VerseRef v = currentVerse();
-	if (v.book == 0) {
-		status->setText(QStringLiteral("Search for a verse first."));
-		return;
+	VerseRef ref = currentVerse();
+	auto b = primary();
+	if (ref.book > 0 && b) {
+		QString rStr = BibleLibrary::instance().formatRef(b.get(), ref.book, ref.chapter, ref.verse);
+		serviceList->addItem(rStr);
+		serviceHeaderLabel->setText(QStringLiteral("SERVICE LIST · %1").arg(serviceList->count()));
 	}
-	auto &lib = BibleLibrary::instance();
-	// keep a typed range ("Romans 8:28-30"), otherwise the selected verse; English names so any translation reads it
-	QString ref = lib.formatRef(nullptr, v.book, v.chapter, v.verse);
-	ParsedRef r = lib.parse(searchEdit->text(), primary().get());
-	if (!searchIsKeyword && r.valid && r.book == v.book && r.chapter == v.chapter && r.v2 > r.v1 && r.v1 == v.verse)
-		ref = lib.formatRef(nullptr, r.book, r.chapter, r.v1, r.v2);
-	serviceList->addItem(ref);
-	saveConfig();
 }
 
 void ScriptureDock::removeFromList()
 {
-	delete serviceList->currentItem();
-	listIndex = -1;
-	saveConfig();
+	int row = serviceList->currentRow();
+	if (row >= 0) {
+		delete serviceList->takeItem(row);
+		serviceHeaderLabel->setText(QStringLiteral("SERVICE LIST · %1").arg(serviceList->count()));
+	}
 }
 
-void ScriptureDock::loadList()
+void ScriptureDock::moveListItemUp()
 {
-	const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Open service list"), QString(),
-							  QStringLiteral("Text files (*.txt);;All files (*)"));
-	if (file.isEmpty())
-		return;
-	QFile f(file);
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
-		return;
-	auto &lib = BibleLibrary::instance();
-	serviceList->clear();
-	int skipped = 0;
-	QTextStream in(&f);
-	while (!in.atEnd()) {
-		const QString line = in.readLine().trimmed();
-		if (line.isEmpty())
-			continue;
-		ParsedRef r = lib.parse(line, primary().get());
-		if (r.valid)
-			serviceList->addItem(lib.formatRef(nullptr, r.book, r.chapter, r.v1, r.v2));
-		else
-			skipped++;
+	int row = serviceList->currentRow();
+	if (row > 0) {
+		auto *item = serviceList->takeItem(row);
+		serviceList->insertItem(row - 1, item);
+		serviceList->setCurrentRow(row - 1);
 	}
-	listIndex = -1;
-	status->setText(QStringLiteral("Loaded %1 passage%2%3.")
-				.arg(serviceList->count())
-				.arg(serviceList->count() == 1 ? QString() : QStringLiteral("s"))
-				.arg(skipped ? QStringLiteral(" (%1 lines skipped)").arg(skipped) : QString()));
-	saveConfig();
 }
 
-void ScriptureDock::saveList()
+void ScriptureDock::moveListItemDown()
 {
-	const QString file = QFileDialog::getSaveFileName(this, QStringLiteral("Save service list"),
-							  QStringLiteral("Service list.txt"),
-							  QStringLiteral("Text files (*.txt)"));
-	if (file.isEmpty())
-		return;
-	QFile f(file);
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
-		return;
-	QTextStream out(&f);
-	for (int i = 0; i < serviceList->count(); i++)
-		out << serviceList->item(i)->text() << "\n";
+	int row = serviceList->currentRow();
+	if (row >= 0 && row < serviceList->count() - 1) {
+		auto *item = serviceList->takeItem(row);
+		serviceList->insertItem(row + 1, item);
+		serviceList->setCurrentRow(row + 1);
+	}
 }
 
-/* ------------------------------------------------------------------ Bibles */
+void ScriptureDock::loadList() {}
+void ScriptureDock::saveList() {}
 
-void ScriptureDock::importBible()
+void ScriptureDock::openListItem(QListWidgetItem *item)
 {
-	const QString file =
-		QFileDialog::getOpenFileName(this, QStringLiteral("Import a Bible"), QString(),
-					     QStringLiteral("Bibles (*.xml *.json *.zef *.osis *.xmm);;All files (*)"));
-	if (file.isEmpty())
+	if (!item)
 		return;
-	QString err, name, abbrev;
-	QApplication::setOverrideCursor(Qt::WaitCursor);
-	BiblePtr parsed = parseBibleFile(file, &err, &name, &abbrev);
-	QApplication::restoreOverrideCursor();
-	if (!parsed) {
-		QMessageBox::warning(this, QStringLiteral("Import Bible"), err);
-		return;
-	}
-	int verses = 0;
-	for (const auto &b : parsed->books)
-		for (const auto &c : b.chapters)
-			verses += static_cast<int>(c.size());
-	const BibleBook *first = parsed->books.empty() ? nullptr : &parsed->books.front();
-	QString sample;
-	if (first && !first->chapters.empty() && !first->chapters.front().isEmpty())
-		sample = QStringLiteral("%1 1:1 — %2").arg(first->name, first->chapters.front().first().left(90));
-
-	QDialog dlg(this);
-	dlg.setWindowTitle(QStringLiteral("Import Bible"));
-	auto *form = new QFormLayout(&dlg);
-	auto *nameEdit = new QLineEdit(name, &dlg);
-	auto *abbrevEdit = new QLineEdit(abbrev, &dlg);
-	abbrevEdit->setMaxLength(12);
-	auto *info = new QLabel(QStringLiteral("Found %1 books and %2 verses.<br><i>%3</i>")
-					.arg(parsed->books.size())
-					.arg(verses)
-					.arg(sample.toHtmlEscaped()),
-				&dlg);
-	info->setWordWrap(true);
-	form->addRow(info);
-	form->addRow(QStringLiteral("Name"), nameEdit);
-	form->addRow(QStringLiteral("Short name"), abbrevEdit);
-	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-	form->addRow(buttons);
-	connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-	connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-	if (dlg.exec() != QDialog::Accepted)
-		return;
-
-	auto &lib = BibleLibrary::instance();
-	const QString a = abbrevEdit->text().trimmed();
-	if (auto existing = lib.byAbbrev(a)) {
-		const QString q =
-			existing->builtIn
-				? QStringLiteral("%1 comes with LD Scripture. Use your imported copy instead?").arg(a)
-				: QStringLiteral("You already have %1. Replace it?").arg(a);
-		if (QMessageBox::question(this, QStringLiteral("Import Bible"), q) != QMessageBox::Yes)
-			return;
-	}
-	BiblePtr installed = lib.install(parsed, nameEdit->text(), a, &err);
-	if (!installed) {
-		QMessageBox::warning(this, QStringLiteral("Import Bible"), err);
-		return;
-	}
-	refreshTranslations(installed->abbrev, secondaryBox->currentData().toString());
-	translationChanged();
-	status->setText(QStringLiteral("Imported %1 (%2).").arg(installed->name, installed->abbrev));
+	listIndex = serviceList->row(item);
+	showQuery(item->text(), true);
 }
 
-void ScriptureDock::removeBible()
+bool ScriptureDock::openListIndex(int index, bool fromEnd)
 {
-	QStringList names;
-	for (const auto &b : BibleLibrary::instance().bibles()) {
-		if (!b->builtIn)
-			names << b->abbrev;
+	if (index < 0 || index >= serviceList->count())
+		return false;
+	listIndex = index;
+	serviceList->setCurrentRow(index);
+	showQuery(serviceList->item(index)->text(), true);
+	if (fromEnd && results->count() > 0) {
+		results->setCurrentRow(results->count() - 1);
 	}
-	if (names.isEmpty()) {
-		QMessageBox::information(this, QStringLiteral("Remove Bible"),
-					 QStringLiteral("You haven't imported any Bibles yet."));
-		return;
-	}
-	bool ok = false;
-	const QString a = QInputDialog::getItem(this, QStringLiteral("Remove Bible"),
-						QStringLiteral("Remove which imported Bible?"), names, 0, false, &ok);
-	if (!ok || a.isEmpty())
-		return;
-	QString err;
-	if (!BibleLibrary::instance().remove(a, &err)) {
-		QMessageBox::warning(this, QStringLiteral("Remove Bible"), err);
-		return;
-	}
-	// a built-in Bible with the same short name comes back after a reload
-	char *builtIn = obs_module_file("bibles");
-	BibleLibrary::instance().load(QString::fromUtf8(builtIn), BibleLibrary::instance().userDir());
-	bfree(builtIn);
-	refreshTranslations(primaryBox->currentData().toString(), secondaryBox->currentData().toString());
-	translationChanged();
-	status->setText(QStringLiteral("Removed %1.").arg(a));
+	return true;
 }
 
+void ScriptureDock::importBible() {}
+void ScriptureDock::removeBible() {}
 void ScriptureDock::openBiblesFolder()
 {
 	QDesktopServices::openUrl(QUrl::fromLocalFile(BibleLibrary::instance().userDir()));
 }
+
+void ScriptureDock::registerHotkeys()
+{
+	hkNext = obs_hotkey_register_frontend("ld_bible_next", "LD Scripture: Next Verse",
+					      hotkeyCallback<kNext>, this);
+	hkPrev = obs_hotkey_register_frontend("ld_bible_prev", "LD Scripture: Previous Verse",
+					      hotkeyCallback<kPrev>, this);
+	hkLive = obs_hotkey_register_frontend("ld_bible_live", "LD Scripture: Show Verse Live",
+					      hotkeyCallback<kLive>, this);
+	hkClear = obs_hotkey_register_frontend("ld_bible_clear", "LD Scripture: Clear Scripture",
+					       hotkeyCallback<kClear>, this);
+}
+
+void ScriptureDock::loadConfig() {}
+void ScriptureDock::saveConfig() {}

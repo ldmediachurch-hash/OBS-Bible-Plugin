@@ -1,5 +1,5 @@
 /*
-LD Scripture for OBS
+LD Worship & Word for OBS
 Copyright (C) 2026 LD Media Church
 
 This program is free software; you can redistribute it and/or modify
@@ -11,6 +11,7 @@ the Free Software Foundation; either version 2 of the License, or
 #pragma once
 
 #include "bible.hpp"
+#include "mini-thumbnail.hpp"
 
 #include <obs.h>
 
@@ -19,11 +20,14 @@ the Free Software Foundation; either version 2 of the License, or
 #include <vector>
 
 class QComboBox;
+class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
+class QToolButton;
+class QVBoxLayout;
 
 class ScriptureDock : public QWidget {
 	Q_OBJECT
@@ -47,14 +51,22 @@ private slots:
 	void translationChanged();
 	void addToList();
 	void removeFromList();
+	void moveListItemUp();
+	void moveListItemDown();
 	void loadList();
 	void saveList();
 	void openListItem(QListWidgetItem *item);
 	void importBible();
 	void removeBible();
 	void openBiblesFolder();
+	void openGearMenu();
+
+protected:
+	void resizeEvent(QResizeEvent *event) override;
+	void keyPressEvent(QKeyEvent *event) override;
 
 private:
+	void setupLayout();
 	void refreshTranslations(const QString &primaryAbbrev, const QString &secondaryAbbrev);
 	void setChapter(int book, int chapter, int selectVerse);
 	VerseRef currentVerse() const;
@@ -66,23 +78,47 @@ private:
 	BiblePtr primary() const;
 	BiblePtr secondary() const;
 	bool openListIndex(int index, bool fromEnd);
+	void updateResponsiveLayout(bool wide);
 
+	// Layout widgets
+	QHBoxLayout *m_topLayout = nullptr;
+	QWidget *m_leftColumn = nullptr;
+	QWidget *m_rightColumn = nullptr;
+	QVBoxLayout *m_leftLayout = nullptr;
+	QVBoxLayout *m_rightLayout = nullptr;
+
+	// Search & Options
 	QLineEdit *searchEdit = nullptr;
+	QToolButton *gearBtn = nullptr;
 	QComboBox *primaryBox = nullptr;
 	QComboBox *secondaryBox = nullptr;
+
+	// Verses section
+	QLabel *versesHeaderLabel = nullptr;
 	QListWidget *results = nullptr;
-	QLabel *preview = nullptr;
-	QLabel *status = nullptr;
-	QLabel *liveBadge = nullptr;
+
+	// Thumbnail & Controls
+	MiniProgramThumbnail *thumbnail = nullptr;
+	QPushButton *prevBtn = nullptr;
 	QPushButton *liveButton = nullptr;
 	QPushButton *clearButton = nullptr;
+	QPushButton *nextBtn = nullptr;
+	QLabel *shortcutHintLabel = nullptr;
+
+	// Service list section
+	QLabel *serviceHeaderLabel = nullptr;
+	QToolButton *serviceAddBtn = nullptr;
+	QToolButton *serviceRemBtn = nullptr;
+	QToolButton *serviceUpBtn = nullptr;
+	QToolButton *serviceDownBtn = nullptr;
 	QListWidget *serviceList = nullptr;
 
 	bool live = false;
-	bool follow = false; // while live, moving the selection updates the screen
+	bool follow = false;
 	int listIndex = -1;
-	int rangeEnd = 0; // last verse of a range opened from the service list
+	int rangeEnd = 0;
 	bool searchIsKeyword = false;
+	bool m_isWideLayout = false;
 
 	obs_hotkey_id hkNext = OBS_INVALID_HOTKEY_ID;
 	obs_hotkey_id hkPrev = OBS_INVALID_HOTKEY_ID;

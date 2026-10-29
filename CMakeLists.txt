@@ -7,6 +7,7 @@ project(${_name} VERSION ${_version})
 option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
 option(ENABLE_QT "Use Qt functionality" ON)
 option(BUILD_TESTS "Build test suite" OFF)
+option(BUILD_EVAL "Build speech evaluation tool" OFF)
 
 include(compilerconfig)
 include(defaults)
@@ -23,8 +24,8 @@ if(ENABLE_FRONTEND_API)
 endif()
 
 if(ENABLE_QT)
-  find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+  find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui Svg)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg)
   target_compile_options(
     ${CMAKE_PROJECT_NAME}
     PRIVATE $<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-quoted-include-in-framework-header -Wno-comma>
@@ -118,6 +119,10 @@ target_sources(
   ${CMAKE_PROJECT_NAME}
   PRIVATE
     src/plugin-main.cpp
+    src/detection-core.cpp
+    src/detection-core.hpp
+    src/mini-thumbnail.cpp
+    src/mini-thumbnail.hpp
     src/audio-engine.cpp
     src/audio-engine.hpp
     src/bible.cpp
@@ -133,6 +138,7 @@ target_sources(
     src/lyrics-dock.hpp
     src/worship-word-dock.cpp
     src/worship-word-dock.hpp
+    data/icons/icons.qrc
 )
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
@@ -147,4 +153,24 @@ if(BUILD_TESTS)
     PROPERTIES AUTOMOC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
   )
   add_test(NAME lyrics-tests COMMAND lyrics-tests)
+endif()
+
+if(BUILD_EVAL OR BUILD_TESTS)
+  add_executable(ldww-eval
+    tools/ldww-eval/main.cpp
+    src/detection-core.cpp
+    src/detection-core.hpp
+    src/lyrics.cpp
+    src/lyrics.hpp
+    src/bible.cpp
+    src/bible.hpp
+  )
+  target_link_libraries(ldww-eval PRIVATE Qt6::Core Qt6::Gui whisper)
+  set_target_properties(
+    ldww-eval
+    PROPERTIES AUTOMOC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+  )
+  if(BUILD_TESTS)
+    add_test(NAME ldww-eval-synthetic COMMAND ldww-eval --wav ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval-synthetic/synthetic_eval.wav --truth ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval-synthetic/ground_truth.csv --songs-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/songs-samples)
+  endif()
 endif()

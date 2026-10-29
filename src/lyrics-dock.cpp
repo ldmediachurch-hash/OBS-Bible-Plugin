@@ -1,5 +1,5 @@
 /*
-LD Scripture for OBS
+LD Worship & Word for OBS
 Copyright (C) 2026 LD Media Church
 
 This program is free software; you can redistribute it and/or modify
@@ -9,7 +9,7 @@ the Free Software Foundation; either version 2 of the License, or
 */
 
 #include "lyrics-dock.hpp"
-#include "display-state.hpp"
+#include "audio-engine.hpp"
 
 #include <obs-module.h>
 #include <obs.hpp>
@@ -26,15 +26,20 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSplitter>
+#include <QStyledItemDelegate>
 #include <QTextStream>
 #include <QToolButton>
 #include <QUrl>
@@ -42,7 +47,15 @@ the Free Software Foundation; either version 2 of the License, or
 
 namespace {
 
-enum Roles { RoleSlideIndex = Qt::UserRole + 1, RoleSongPath, RoleSectionCode, RoleSectionName };
+enum Roles {
+	RoleSlideIndex = Qt::UserRole + 1,
+	RoleSongPath,
+	RoleSectionCode,
+	RoleSectionName,
+	RoleIsFirstOfSection,
+	RoleIsLive,
+	RoleIsNext
+};
 
 QString configPath()
 {
@@ -72,868 +85,927 @@ const char kLive[] = "goLive";
 const char kClear[] = "clearLive";
 const char kBlank[] = "toggleBlank";
 
-class SearchKeys : public QObject {
+// Delegate for Slide Cards (Mockup fidelity)
+class SlideCardDelegate : public QStyledItemDelegate {
 public:
-	SearchKeys(QListWidget *list, QObject *parent) : QObject(parent), slideList(list) {}
+	explicit SlideCardDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
 
-protected:
-	bool eventFilter(QObject *obj, QEvent *ev) override
+	void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
 	{
-		if (ev->type() == QEvent::KeyPress) {
-			auto *ke = static_cast<QKeyEvent *>(ev);
-			if (ke->key() == Qt::Key_Down || ke->key() == Qt::Key_Up) {
-				const int delta = (ke->key() == Qt::Key_Down) ? 1 : -1;
-				int row = slideList->currentRow() + delta;
-				while (row >= 0 && row < slideList->count()) {
-					if (slideList->item(row)->data(RoleSlideIndex).toInt() >= 0) {
-						slideList->setCurrentRow(row);
-						break;
-					}
-					row += delta;
-				}
-				return true;
-			}
+		p->save();
+		p->setRenderHint(QPainter::Antialiasing, true);
+
+		QRect r = option.rect.adjusted(4, 4, -4, -4);
+		bool isSelected = option.state & QStyle::State_Selected;
+		bool isLive = index.data(RoleIsLive).toBool();
+		bool isNext = index.data(RoleIsNext).toBool();
+		bool isFirst = index.data(RoleIsFirstOfSection).toBool();
+		QString sectionName = index.data(RoleSectionName).toString().toUpper();
+		QString text = index.data(Qt::DisplayRole).toString();
+
+		// Background
+		QPainterPath path;
+		path.addRoundedRect(r, 6, 6);
+		if (isSelected) {
+			p->fillPath(path, QColor(255, 255, 255, 18));
+		} else {
+			p->fillPath(path, QColor(255, 255, 255, 8));
 		}
-		return QObject::eventFilter(obj, ev);
+
+		// Border outline
+		if (isLive) {
+			// Solid white border
+			p->setPen(QPen(QColor(255, 255, 255), 2.0));
+			p->drawPath(path);
+		} else if (isNext) {
+			// Dashed border
+			QPen dashPen(QColor(255, 255, 255, 110), 1.5, Qt::DashLine);
+			p->setPen(dashPen);
+			p->drawPath(path);
+		} else {
+			p->setPen(QPen(QColor(255, 255, 255, 20), 1.0));
+			p->drawPath(path);
+		}
+
+		int contentTop = r.top() + 6;
+
+		// Section header on first slide of each section
+		if (isFirst && !sectionName.isEmpty()) {
+			QFont secFont = option.font;
+			secFont.setPointSize(8);
+			secFont.setBold(true);
+			secFont.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
+			p->setFont(secFont);
+			p->setPen(QColor(140, 147, 160));
+			p->drawText(r.left() + 10, contentTop + 10, sectionName);
+		}
+
+		// Live badge on top right
+		if (isLive) {
+			const int dotX = r.right() - 48;
+			const int dotY = contentTop + 6;
+			p->setPen(Qt::NoPen);
+			p->setBrush(QColor(255, 45, 45)); // #FF2D2D
+			p->drawEllipse(QPointF(dotX, dotY), 3.5, 3.5);
+
+			QFont liveFont = option.font;
+			liveFont.setPointSize(8);
+			liveFont.setBold(true);
+			p->setFont(liveFont);
+			p->setPen(QColor(255, 45, 45));
+			p->drawText(dotX + 7, dotY + 4, QStringLiteral("LIVE"));
+		}
+
+		// Slide text lines
+		QFont textFont = option.font;
+		textFont.setPointSize(9);
+		p->setFont(textFont);
+		p->setPen(QColor(240, 243, 246));
+
+		int textTop = isFirst ? (contentTop + 20) : (contentTop + 6);
+		QRect textRect(r.left() + 10, textTop, r.width() - 20, r.bottom() - textTop - 6);
+		p->drawText(textRect, Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, text);
+
+		p->restore();
 	}
 
-private:
-	QListWidget *slideList;
+	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
+	{
+		bool isFirst = index.data(RoleIsFirstOfSection).toBool();
+		int baseH = isFirst ? 68 : 52;
+		return QSize(option.rect.width(), baseH);
+	}
+};
+
+// Delegate for Song Library rows
+class SongListDelegate : public QStyledItemDelegate {
+public:
+	explicit SongListDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
+
+	void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+	{
+		p->save();
+		p->setRenderHint(QPainter::Antialiasing, true);
+
+		QRect r = option.rect.adjusted(2, 2, -2, -2);
+		bool isSelected = option.state & QStyle::State_Selected;
+
+		if (isSelected) {
+			QPainterPath path;
+			path.addRoundedRect(r, 4, 4);
+			p->fillPath(path, QColor(255, 255, 255, 16));
+
+			// 2px white left bar
+			p->fillRect(QRect(r.left(), r.top() + 4, 2, r.height() - 8), Qt::white);
+		}
+
+		QString title = index.data(Qt::DisplayRole).toString();
+		QString author = index.data(Qt::UserRole + 10).toString();
+
+		QFont titleFont = option.font;
+		titleFont.setBold(isSelected);
+		p->setFont(titleFont);
+		p->setPen(isSelected ? Qt::white : QColor(220, 224, 230));
+
+		const int margin = 8;
+		const int titleW = static_cast<int>(r.width() * 0.65) - margin;
+		QRect titleRect(r.left() + margin, r.top(), titleW, r.height());
+		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
+
+		if (!author.isEmpty()) {
+			QFont authorFont = option.font;
+			authorFont.setPointSize(authorFont.pointSize() - 1);
+			p->setFont(authorFont);
+			p->setPen(QColor(130, 137, 150));
+			const int authorX = r.left() + static_cast<int>(r.width() * 0.65);
+			const int authorW = static_cast<int>(r.width() * 0.35) - margin;
+			QRect authorRect(authorX, r.top(), authorW, r.height());
+			p->drawText(authorRect, Qt::AlignRight | Qt::AlignVCenter, author);
+		}
+
+		p->restore();
+	}
+
+	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
+	{
+		return QSize(option.rect.width(), 32);
+	}
+};
+
+// Delegate for Setlist with numbered rows
+class SetlistDelegate : public QStyledItemDelegate {
+public:
+	explicit SetlistDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
+
+	void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+	{
+		p->save();
+		p->setRenderHint(QPainter::Antialiasing, true);
+
+		QRect r = option.rect.adjusted(2, 2, -2, -2);
+		bool isSelected = option.state & QStyle::State_Selected;
+
+		if (isSelected) {
+			QPainterPath path;
+			path.addRoundedRect(r, 4, 4);
+			p->fillPath(path, QColor(255, 255, 255, 16));
+			p->fillRect(QRect(r.left(), r.top() + 4, 2, r.height() - 8), Qt::white);
+		}
+
+		QString numStr = QString::number(index.row() + 1);
+		QString title = index.data(Qt::DisplayRole).toString();
+
+		// Row number in muted gray
+		QFont numFont = option.font;
+		numFont.setPointSize(numFont.pointSize() - 1);
+		p->setFont(numFont);
+		p->setPen(QColor(130, 137, 150));
+		QRect numRect(r.left() + 6, r.top(), 22, r.height());
+		p->drawText(numRect, Qt::AlignLeft | Qt::AlignVCenter, numStr);
+
+		// Song title
+		QFont titleFont = option.font;
+		titleFont.setBold(isSelected);
+		p->setFont(titleFont);
+		p->setPen(isSelected ? Qt::white : QColor(220, 224, 230));
+		QRect titleRect(r.left() + 32, r.top(), r.width() - 38, r.height());
+		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
+
+		p->restore();
+	}
+
+	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
+	{
+		return QSize(option.rect.width(), 32);
+	}
 };
 
 } // namespace
 
-LyricsDock::LyricsDock(QWidget *parent) : QWidget(parent)
+LyricsDock::LyricsDock(QWidget *parent)
+	: QWidget(parent)
 {
-	setMinimumWidth(280);
-	auto *root = new QVBoxLayout(this);
-	root->setContentsMargins(6, 6, 6, 6);
-	root->setSpacing(6);
-
-	// Top search & songs menu row
-	auto *topRow = new QHBoxLayout();
-	searchEdit = new QLineEdit(this);
-	searchEdit->setPlaceholderText(QStringLiteral("Search title or lyrics…"));
-	searchEdit->setClearButtonEnabled(true);
-	topRow->addWidget(searchEdit, 1);
-
-	auto *songsMenuBtn = new QToolButton(this);
-	songsMenuBtn->setText(QStringLiteral("Songs"));
-	songsMenuBtn->setPopupMode(QToolButton::InstantPopup);
-	auto *sMenu = new QMenu(songsMenuBtn);
-	sMenu->addAction(QStringLiteral("New song…"), this, &LyricsDock::newSongDialog);
-	sMenu->addAction(QStringLiteral("Edit current song…"), this, &LyricsDock::editSongDialog);
-	sMenu->addAction(QStringLiteral("Import songs (Text or OpenLyrics XML)…"), this, &LyricsDock::importSongs);
-	sMenu->addSeparator();
-	sMenu->addAction(QStringLiteral("Open songs folder"), this, &LyricsDock::openSongsFolder);
-	songsMenuBtn->setMenu(sMenu);
-	topRow->addWidget(songsMenuBtn);
-
-	linesBox = new QComboBox(this);
-	linesBox->setToolTip(QStringLiteral("Lines per slide"));
-	linesBox->addItem(QStringLiteral("1 line"), 1);
-	linesBox->addItem(QStringLiteral("2 lines"), 2);
-	linesBox->addItem(QStringLiteral("3 lines"), 3);
-	linesBox->addItem(QStringLiteral("4 lines"), 4);
-	linesBox->setCurrentIndex(1); // default 2 lines
-	topRow->addWidget(linesBox);
-
-	root->addLayout(topRow);
-
-	// Splitter containing Song Library list (top) and Current Song Slides (bottom)
-	auto *splitter = new QSplitter(Qt::Vertical, this);
-
-	songList = new QListWidget(splitter);
-	songList->setUniformItemSizes(true);
-	songList->setTextElideMode(Qt::ElideRight);
-	songList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	songList->setWordWrap(false);
-	songList->setToolTip(QStringLiteral("Library songs. Double-click or press Enter to open."));
-
-	slideList = new QListWidget(splitter);
-	slideList->setUniformItemSizes(true);
-	slideList->setTextElideMode(Qt::ElideRight);
-	slideList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	slideList->setWordWrap(false);
-
-	splitter->addWidget(songList);
-	splitter->addWidget(slideList);
-	splitter->setStretchFactor(0, 1);
-	splitter->setStretchFactor(1, 3);
-	root->addWidget(splitter, 4);
-
-	// Section jump buttons container
-	sectionContainer = new QWidget(this);
-	auto *secLayout = new QHBoxLayout(sectionContainer);
-	secLayout->setContentsMargins(0, 0, 0, 0);
-	secLayout->setSpacing(4);
-	root->addWidget(sectionContainer);
-
-	// Preview frame
-	preview = new QLabel(this);
-	preview->setWordWrap(true);
-	preview->setFrameShape(QFrame::StyledPanel);
-	preview->setMargin(8);
-	preview->setTextFormat(Qt::RichText);
-	preview->setMinimumHeight(70);
-	preview->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-	root->addWidget(preview, 2);
-
-	// Controls: ◀ Show Blank Clear ▶
-	auto *ctl = new QHBoxLayout();
-	auto *prevBtn = new QPushButton(QStringLiteral("◀"), this);
-	prevBtn->setToolTip(QStringLiteral("Previous slide"));
-	liveButton = new QPushButton(QStringLiteral("Show"), this);
-	liveButton->setToolTip(QStringLiteral("Put the selected slide on screen"));
-	blankButton = new QPushButton(QStringLiteral("Blank"), this);
-	blankButton->setToolTip(QStringLiteral("Keep live state but hide card for instrumental breaks"));
-	blankButton->setCheckable(true);
-	clearButton = new QPushButton(QStringLiteral("Clear"), this);
-	clearButton->setToolTip(QStringLiteral("Take the lyrics off screen"));
-	auto *nextBtn = new QPushButton(QStringLiteral("▶"), this);
-	nextBtn->setToolTip(QStringLiteral("Next slide"));
-	prevBtn->setMaximumWidth(40);
-	nextBtn->setMaximumWidth(40);
-	ctl->addWidget(prevBtn);
-	ctl->addWidget(liveButton, 2);
-	ctl->addWidget(blankButton, 1);
-	ctl->addWidget(clearButton, 2);
-	ctl->addWidget(nextBtn);
-	root->addLayout(ctl);
-
-	// Status & Live badge row
-	auto *stRow = new QHBoxLayout();
-	liveBadge = new QLabel(this);
-	status = new QLabel(this);
-	status->setWordWrap(true);
-	QFont small = status->font();
-	small.setPointSizeF(small.pointSizeF() * 0.9);
-	status->setFont(small);
-	stRow->addWidget(liveBadge);
-	stRow->addWidget(status, 1);
-	root->addLayout(stRow);
-
-	// Setlist header and list
-	auto *listHeader = new QLabel(QStringLiteral("<b>Setlist</b>"), this);
-	root->addWidget(listHeader);
-	setlist = new QListWidget(this);
-	setlist->setDragDropMode(QAbstractItemView::InternalMove);
-	root->addWidget(setlist, 2);
-
-	auto *lRow = new QHBoxLayout();
-	auto *addBtn = new QPushButton(QStringLiteral("Add"), this);
-	addBtn->setToolTip(QStringLiteral("Add current song to setlist"));
-	auto *remBtn = new QPushButton(QStringLiteral("Remove"), this);
-	auto *loadBtn = new QPushButton(QStringLiteral("Open…"), this);
-	auto *saveBtn = new QPushButton(QStringLiteral("Save…"), this);
-	lRow->addWidget(addBtn);
-	lRow->addWidget(remBtn);
-	lRow->addWidget(loadBtn);
-	lRow->addWidget(saveBtn);
-	root->addLayout(lRow);
-
-	searchEdit->installEventFilter(new SearchKeys(slideList, this));
-
-	connect(searchEdit, &QLineEdit::textChanged, this, &LyricsDock::searchTextChanged);
-	connect(searchEdit, &QLineEdit::returnPressed, this, &LyricsDock::runSearch);
-	connect(songList, &QListWidget::itemDoubleClicked, this, &LyricsDock::songSelected);
-	connect(slideList, &QListWidget::currentRowChanged, this, &LyricsDock::slideSelectionChanged);
-	connect(slideList, &QListWidget::itemActivated, this, [this](QListWidgetItem *) { goLive(); });
-	connect(linesBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &LyricsDock::linesPerSlideChanged);
-
-	connect(prevBtn, &QPushButton::clicked, this, &LyricsDock::prev);
-	connect(nextBtn, &QPushButton::clicked, this, &LyricsDock::next);
-	connect(liveButton, &QPushButton::clicked, this, &LyricsDock::goLive);
-	connect(blankButton, &QPushButton::clicked, this, &LyricsDock::toggleBlank);
-	connect(clearButton, &QPushButton::clicked, this, &LyricsDock::clearLive);
-
-	connect(addBtn, &QPushButton::clicked, this, &LyricsDock::addToList);
-	connect(remBtn, &QPushButton::clicked, this, &LyricsDock::removeFromList);
-	connect(loadBtn, &QPushButton::clicked, this, &LyricsDock::loadList);
-	connect(saveBtn, &QPushButton::clicked, this, &LyricsDock::saveList);
-	connect(setlist, &QListWidget::itemActivated, this, &LyricsDock::openListItem);
-
+	setMinimumWidth(300);
+	setupLayout();
 	registerHotkeys();
-	loadConfig();
 	refreshSongList();
-	updatePreview();
+	loadConfig();
 }
 
 LyricsDock::~LyricsDock()
 {
-	if (obs_initialized()) {
-		for (obs_hotkey_id id : {hkNext, hkPrev, hkLive, hkClear, hkBlank}) {
-			if (id != OBS_INVALID_HOTKEY_ID)
-				obs_hotkey_unregister(id);
-		}
-	}
+	saveConfig();
+	if (hkNext != OBS_INVALID_HOTKEY_ID)
+		obs_hotkey_unregister(hkNext);
+	if (hkPrev != OBS_INVALID_HOTKEY_ID)
+		obs_hotkey_unregister(hkPrev);
+	if (hkLive != OBS_INVALID_HOTKEY_ID)
+		obs_hotkey_unregister(hkLive);
+	if (hkClear != OBS_INVALID_HOTKEY_ID)
+		obs_hotkey_unregister(hkClear);
 }
 
-void LyricsDock::registerHotkeys()
+void LyricsDock::setupLayout()
 {
-	hkNext = obs_hotkey_register_frontend("ld_lyrics.next", "LD Lyrics: Next slide", hotkeyCallback<kNext>, this);
-	hkPrev = obs_hotkey_register_frontend("ld_lyrics.prev", "LD Lyrics: Previous slide", hotkeyCallback<kPrev>,
-					      this);
-	hkLive = obs_hotkey_register_frontend("ld_lyrics.show", "LD Lyrics: Show", hotkeyCallback<kLive>, this);
-	hkClear = obs_hotkey_register_frontend("ld_lyrics.clear", "LD Lyrics: Clear", hotkeyCallback<kClear>, this);
-	hkBlank = obs_hotkey_register_frontend("ld_lyrics.blank", "LD Lyrics: Blank", hotkeyCallback<kBlank>, this);
+	auto *root = new QVBoxLayout(this);
+	root->setContentsMargins(6, 6, 6, 6);
+	root->setSpacing(6);
+
+	// 1. Search + Gear Row
+	auto *searchRow = new QHBoxLayout();
+	searchRow->setSpacing(6);
+
+	searchEdit = new QLineEdit(this);
+	searchEdit->setPlaceholderText(QStringLiteral("Search songs or lyrics"));
+	searchEdit->setClearButtonEnabled(true);
+	searchRow->addWidget(searchEdit, 1);
+
+	gearBtn = new QToolButton(this);
+	gearBtn->setIcon(QIcon(QStringLiteral(":/icons/gear.svg")));
+	gearBtn->setToolTip(QStringLiteral("Settings & Model Options"));
+	gearBtn->setFixedSize(30, 30);
+	connect(gearBtn, &QToolButton::clicked, this, &LyricsDock::openGearMenu);
+	searchRow->addWidget(gearBtn);
+
+	root->addLayout(searchRow);
+
+	// 2. Main content container (supports 1-column or 2-column responsive layout)
+	m_topLayout = new QHBoxLayout();
+	m_topLayout->setSpacing(8);
+
+	m_leftColumn = new QWidget(this);
+	m_leftLayout = new QVBoxLayout(m_leftColumn);
+	m_leftLayout->setContentsMargins(0, 0, 0, 0);
+	m_leftLayout->setSpacing(6);
+
+	m_rightColumn = new QWidget(this);
+	m_rightLayout = new QVBoxLayout(m_rightColumn);
+	m_rightLayout->setContentsMargins(0, 0, 0, 0);
+	m_rightLayout->setSpacing(6);
+
+	// --- Library Section ---
+	auto *libHeaderRow = new QHBoxLayout();
+	libraryHeaderLabel = new QLabel(QStringLiteral("LIBRARY · 0"), m_leftColumn);
+	QFont hFont = font();
+	hFont.setPointSize(8);
+	hFont.setBold(true);
+	hFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
+	libraryHeaderLabel->setFont(hFont);
+	libraryHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
+	libHeaderRow->addWidget(libraryHeaderLabel, 1);
+
+	importBtn = new QToolButton(m_leftColumn);
+	importBtn->setText(QStringLiteral("Import ▾"));
+	importBtn->setPopupMode(QToolButton::InstantPopup);
+	auto *importMenu = new QMenu(importBtn);
+	importMenu->addAction(QStringLiteral("Import Songs (OpenLyrics/Text)…"), this, &LyricsDock::importSongs);
+	importMenu->addAction(QStringLiteral("New Song…"), this, &LyricsDock::newSongDialog);
+	importMenu->addAction(QStringLiteral("Edit Current Song…"), this, &LyricsDock::editSongDialog);
+	importMenu->addSeparator();
+	importMenu->addAction(QStringLiteral("Open Songs Folder"), this, &LyricsDock::openSongsFolder);
+	importBtn->setMenu(importMenu);
+	libHeaderRow->addWidget(importBtn);
+	m_leftLayout->addLayout(libHeaderRow);
+
+	songList = new QListWidget(m_leftColumn);
+	songList->setItemDelegate(new SongListDelegate(songList));
+	songList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	songList->setMinimumHeight(100);
+	m_leftLayout->addWidget(songList, 2);
+
+	// --- Setlist Section ---
+	auto *setlistHeaderRow = new QHBoxLayout();
+	setlistHeaderLabel = new QLabel(QStringLiteral("SETLIST · 0"), m_leftColumn);
+	setlistHeaderLabel->setFont(hFont);
+	setlistHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
+	setlistHeaderRow->addWidget(setlistHeaderLabel, 1);
+
+	setlistAddBtn = new QToolButton(m_leftColumn);
+	setlistAddBtn->setIcon(QIcon(QStringLiteral(":/icons/plus.svg")));
+	setlistAddBtn->setToolTip(QStringLiteral("Add current song to setlist"));
+	connect(setlistAddBtn, &QToolButton::clicked, this, &LyricsDock::addToList);
+	setlistHeaderRow->addWidget(setlistAddBtn);
+
+	setlistRemBtn = new QToolButton(m_leftColumn);
+	setlistRemBtn->setIcon(QIcon(QStringLiteral(":/icons/minus.svg")));
+	setlistRemBtn->setToolTip(QStringLiteral("Remove selected song from setlist"));
+	connect(setlistRemBtn, &QToolButton::clicked, this, &LyricsDock::removeFromList);
+	setlistHeaderRow->addWidget(setlistRemBtn);
+
+	setlistUpBtn = new QToolButton(m_leftColumn);
+	setlistUpBtn->setIcon(QIcon(QStringLiteral(":/icons/prev.svg")));
+	setlistUpBtn->setToolTip(QStringLiteral("Move up in setlist"));
+	connect(setlistUpBtn, &QToolButton::clicked, this, &LyricsDock::moveListItemUp);
+	setlistHeaderRow->addWidget(setlistUpBtn);
+
+	setlistDownBtn = new QToolButton(m_leftColumn);
+	setlistDownBtn->setIcon(QIcon(QStringLiteral(":/icons/next.svg")));
+	setlistDownBtn->setToolTip(QStringLiteral("Move down in setlist"));
+	connect(setlistDownBtn, &QToolButton::clicked, this, &LyricsDock::moveListItemDown);
+	setlistHeaderRow->addWidget(setlistDownBtn);
+
+	m_leftLayout->addLayout(setlistHeaderRow);
+
+	setlist = new QListWidget(m_leftColumn);
+	setlist->setItemDelegate(new SetlistDelegate(setlist));
+	setlist->setDragDropMode(QAbstractItemView::InternalMove);
+	setlist->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	setlist->setMinimumHeight(90);
+	m_leftLayout->addWidget(setlist, 1);
+
+	// --- Slides Section ---
+	auto *slidesHeaderRow = new QHBoxLayout();
+	slidesHeaderLabel = new QLabel(QStringLiteral("SLIDES"), m_rightColumn);
+	slidesHeaderLabel->setFont(hFont);
+	slidesHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
+	slidesHeaderRow->addWidget(slidesHeaderLabel, 1);
+
+	linesBtn = new QToolButton(m_rightColumn);
+	linesBtn->setText(QStringLiteral("2 lines ▾"));
+	linesBtn->setPopupMode(QToolButton::InstantPopup);
+	auto *linesMenu = new QMenu(linesBtn);
+	auto *act1 = linesMenu->addAction(QStringLiteral("1 line"));
+	auto *act2 = linesMenu->addAction(QStringLiteral("2 lines"));
+	auto *act3 = linesMenu->addAction(QStringLiteral("3 lines"));
+	auto *act4 = linesMenu->addAction(QStringLiteral("4 lines"));
+	connect(act1, &QAction::triggered, this, [this]() { setLinesPerSlide(1); });
+	connect(act2, &QAction::triggered, this, [this]() { setLinesPerSlide(2); });
+	connect(act3, &QAction::triggered, this, [this]() { setLinesPerSlide(3); });
+	connect(act4, &QAction::triggered, this, [this]() { setLinesPerSlide(4); });
+	linesBtn->setMenu(linesMenu);
+	slidesHeaderRow->addWidget(linesBtn);
+	m_rightLayout->addLayout(slidesHeaderRow);
+
+	// Section Chips
+	sectionContainer = new QWidget(m_rightColumn);
+	sectionLayout = new QHBoxLayout(sectionContainer);
+	sectionLayout->setContentsMargins(0, 0, 0, 0);
+	sectionLayout->setSpacing(4);
+	m_rightLayout->addWidget(sectionContainer);
+
+	// Slide Cards
+	slideList = new QListWidget(m_rightColumn);
+	slideList->setItemDelegate(new SlideCardDelegate(slideList));
+	slideList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	m_rightLayout->addWidget(slideList, 3);
+
+	// 16:9 Mini Program Thumbnail
+	thumbnail = new MiniProgramThumbnail(m_rightColumn);
+	m_rightLayout->addWidget(thumbnail, 2);
+
+	// Sticky Bottom Control Bar
+	auto *ctlRow = new QHBoxLayout();
+	ctlRow->setSpacing(6);
+
+	prevBtn = new QPushButton(QStringLiteral("◀"), m_rightColumn);
+	prevBtn->setToolTip(QStringLiteral("Previous Slide (Shift+Space)"));
+	prevBtn->setFixedHeight(34);
+	prevBtn->setMaximumWidth(40);
+	connect(prevBtn, &QPushButton::clicked, this, &LyricsDock::prev);
+	ctlRow->addWidget(prevBtn);
+
+	liveButton = new QPushButton(QStringLiteral("On screen"), m_rightColumn);
+	liveButton->setObjectName(QStringLiteral("PrimaryShowBtn"));
+	liveButton->setStyleSheet(QStringLiteral(
+		"QPushButton#PrimaryShowBtn { background-color: #FFFFFF; color: #0F1115; font-weight: bold; border-radius: 6px; padding: 6px 14px; border: none; font-size: 13px; } "
+		"QPushButton#PrimaryShowBtn:hover { background-color: #E2E8F0; } "
+		"QPushButton#PrimaryShowBtn:pressed { background-color: #CBD5E1; }"));
+	liveButton->setToolTip(QStringLiteral("Show selected slide on screen (Enter)"));
+	liveButton->setFixedHeight(34);
+	connect(liveButton, &QPushButton::clicked, this, &LyricsDock::goLive);
+	ctlRow->addWidget(liveButton, 2);
+
+	blankButton = new QPushButton(QStringLiteral("Blank"), m_rightColumn);
+	blankButton->setCheckable(true);
+	blankButton->setToolTip(QStringLiteral("Keep live state but hide card for instrumental breaks (B)"));
+	blankButton->setFixedHeight(34);
+	connect(blankButton, &QPushButton::clicked, this, &LyricsDock::toggleBlank);
+	ctlRow->addWidget(blankButton, 1);
+
+	clearButton = new QPushButton(QStringLiteral("Clear"), m_rightColumn);
+	clearButton->setToolTip(QStringLiteral("Take lyrics off screen (Esc)"));
+	clearButton->setFixedHeight(34);
+	connect(clearButton, &QPushButton::clicked, this, &LyricsDock::clearLive);
+	ctlRow->addWidget(clearButton, 1);
+
+	nextBtn = new QPushButton(QStringLiteral("▶"), m_rightColumn);
+	nextBtn->setToolTip(QStringLiteral("Next Slide (Space)"));
+	nextBtn->setFixedHeight(34);
+	nextBtn->setMaximumWidth(40);
+	connect(nextBtn, &QPushButton::clicked, this, &LyricsDock::next);
+	ctlRow->addWidget(nextBtn);
+
+	m_rightLayout->addLayout(ctlRow);
+
+	// Keyboard shortcut hints row
+	shortcutHintLabel = new QLabel(QStringLiteral("Space next · ⇧Space back · Enter show · B blank · Esc clear"), m_rightColumn);
+	QFont hintFont = font();
+	hintFont.setPointSize(8);
+	shortcutHintLabel->setFont(hintFont);
+	shortcutHintLabel->setAlignment(Qt::AlignCenter);
+	shortcutHintLabel->setStyleSheet(QStringLiteral("color: #717886;"));
+	m_rightLayout->addWidget(shortcutHintLabel);
+
+	// Assemble layout into root
+	m_topLayout->addWidget(m_leftColumn, 1);
+	m_topLayout->addWidget(m_rightColumn, 1);
+	root->addLayout(m_topLayout, 1);
+
+	// Connect signals
+	connect(searchEdit, &QLineEdit::textChanged, this, &LyricsDock::searchTextChanged);
+	connect(searchEdit, &QLineEdit::returnPressed, this, &LyricsDock::runSearch);
+	connect(songList, &QListWidget::itemDoubleClicked, this, &LyricsDock::songSelected);
+	connect(slideList, &QListWidget::currentRowChanged, this, &LyricsDock::slideSelectionChanged);
+	connect(setlist, &QListWidget::itemDoubleClicked, this, &LyricsDock::openListItem);
 }
 
-/* ------------------------------------------------------------------ config */
-
-void LyricsDock::loadConfig()
+void LyricsDock::resizeEvent(QResizeEvent *event)
 {
-	OBSDataAutoRelease cfg = obs_data_create_from_json_file_safe(configPath().toUtf8().constData(), "bak");
-	QString lastSong;
-	if (cfg) {
-		linesPerSlide = static_cast<int>(obs_data_get_int(cfg, "lines_per_slide"));
-		if (linesPerSlide < 1 || linesPerSlide > 4)
-			linesPerSlide = 2;
-		for (int i = 0; i < linesBox->count(); i++) {
-			if (linesBox->itemData(i).toInt() == linesPerSlide) {
-				linesBox->setCurrentIndex(i);
-				break;
-			}
-		}
-
-		lastSong = QString::fromUtf8(obs_data_get_string(cfg, "current_song"));
-
-		OBSDataArrayAutoRelease list = obs_data_get_array(cfg, "setlist");
-		const size_t count = obs_data_array_count(list);
-		for (size_t i = 0; i < count; i++) {
-			OBSDataAutoRelease item = obs_data_array_item(list, i);
-			setlist->addItem(QString::fromUtf8(obs_data_get_string(item, "song")));
-		}
-
-		const std::pair<obs_hotkey_id, const char *> keys[] = {{hkNext, "hk_next"},
-								       {hkPrev, "hk_prev"},
-								       {hkLive, "hk_show"},
-								       {hkClear, "hk_clear"},
-								       {hkBlank, "hk_blank"}};
-		for (const auto &k : keys) {
-			OBSDataArrayAutoRelease arr = obs_data_get_array(cfg, k.second);
-			if (arr)
-				obs_hotkey_load(k.first, arr);
-		}
+	QWidget::resizeEvent(event);
+	bool wide = width() > 620;
+	if (wide != m_isWideLayout) {
+		updateResponsiveLayout(wide);
 	}
-
-	if (!lastSong.isEmpty())
-		openSong(lastSong, false);
-	else {
-		const auto all = SongLibrary::instance().songs();
-		if (!all.empty())
-			openSong(all.front().title, false);
-	}
-	status->setText(QStringLiteral("Select a song and press Show."));
 }
 
-void LyricsDock::saveConfig()
+void LyricsDock::updateResponsiveLayout(bool wide)
 {
-	ensureConfigDir();
-	OBSDataAutoRelease cfg = obs_data_create();
-	obs_data_set_int(cfg, "lines_per_slide", linesPerSlide);
-	if (!currentSong.title.isEmpty())
-		obs_data_set_string(cfg, "current_song", currentSong.title.toUtf8().constData());
-
-	OBSDataArrayAutoRelease list = obs_data_array_create();
-	for (int i = 0; i < setlist->count(); i++) {
-		OBSDataAutoRelease item = obs_data_create();
-		obs_data_set_string(item, "song", setlist->item(i)->text().toUtf8().constData());
-		obs_data_array_push_back(list, item);
+	m_isWideLayout = wide;
+	if (wide) {
+		m_leftColumn->setVisible(true);
+		m_rightColumn->setVisible(true);
+		m_topLayout->setDirection(QBoxLayout::LeftToRight);
+	} else {
+		m_leftColumn->setVisible(true);
+		m_rightColumn->setVisible(true);
+		m_topLayout->setDirection(QBoxLayout::TopToBottom);
 	}
-	obs_data_set_array(cfg, "setlist", list);
-
-	const std::pair<obs_hotkey_id, const char *> keys[] = {{hkNext, "hk_next"},
-							       {hkPrev, "hk_prev"},
-							       {hkLive, "hk_show"},
-							       {hkClear, "hk_clear"},
-							       {hkBlank, "hk_blank"}};
-	for (const auto &k : keys) {
-		OBSDataArrayAutoRelease arr = obs_hotkey_save(k.first);
-		obs_data_set_array(cfg, k.second, arr);
-	}
-	obs_data_save_json_safe(cfg, configPath().toUtf8().constData(), "tmp", "bak");
 }
 
-/* ------------------------------------------------------------------ library & search */
+void LyricsDock::keyPressEvent(QKeyEvent *event)
+{
+	switch (event->key()) {
+	case Qt::Key_Space:
+		if (event->modifiers() & Qt::ShiftModifier) {
+			prev();
+		} else {
+			next();
+		}
+		event->accept();
+		return;
+	case Qt::Key_Return:
+	case Qt::Key_Enter:
+		goLive();
+		event->accept();
+		return;
+	case Qt::Key_B:
+		toggleBlank();
+		event->accept();
+		return;
+	case Qt::Key_Escape:
+		clearLive();
+		event->accept();
+		return;
+	default:
+		break;
+	}
+	QWidget::keyPressEvent(event);
+}
+
+void LyricsDock::openGearMenu()
+{
+	auto *menu = new QMenu(this);
+
+	// Lines per slide
+	auto *linesSub = menu->addMenu(QStringLiteral("Lines per slide"));
+	for (int l = 1; l <= 4; ++l) {
+		auto *act = linesSub->addAction(QStringLiteral("%1 line%2").arg(l).arg(l > 1 ? "s" : ""));
+		act->setCheckable(true);
+		act->setChecked(linesPerSlide == l);
+		connect(act, &QAction::triggered, this, [this, l]() { setLinesPerSlide(l); });
+	}
+
+	// Model Selection
+	auto *modelSub = menu->addMenu(QStringLiteral("Speech model"));
+	auto *actBase = modelSub->addAction(QStringLiteral("base.en-q5_1 (Recommended)"));
+	auto *actTiny = modelSub->addAction(QStringLiteral("tiny.en (Fast / Low CPU)"));
+	auto *actCustom = modelSub->addAction(QStringLiteral("Browse model file…"));
+
+	connect(actBase, &QAction::triggered, this, []() {
+		AudioEngine::instance().core().loadModel(QStringLiteral("data/models/ggml-base.en-q5_1.bin"));
+	});
+	connect(actTiny, &QAction::triggered, this, []() {
+		AudioEngine::instance().core().loadModel(QStringLiteral("data/models/ggml-tiny.en.bin"));
+	});
+	connect(actCustom, &QAction::triggered, this, &LyricsDock::selectCustomModel);
+
+	// Hardware backend info
+	QString backend = AudioEngine::instance().core().backendInfo();
+	if (backend.isEmpty())
+		backend = QStringLiteral("CPU");
+	auto *actBackend = menu->addAction(QStringLiteral("Backend: %1").arg(backend));
+	actBackend->setEnabled(false);
+
+	menu->addSeparator();
+
+	// Follow Mode Checkbox
+	auto *actFollow = menu->addAction(QStringLiteral("Follow mode (smart setlist)"));
+	actFollow->setCheckable(true);
+	actFollow->setChecked(AudioEngine::instance().core().followMode());
+	connect(actFollow, &QAction::toggled, this, [](bool checked) {
+		AudioEngine::instance().core().setFollowMode(checked);
+	});
+
+	// Auto-Advance Checkbox
+	auto *actAuto = menu->addAction(QStringLiteral("Auto-advance on speech match"));
+	actAuto->setCheckable(true);
+	actAuto->setChecked(AudioEngine::instance().core().autoAdvance());
+	connect(actAuto, &QAction::toggled, this, [](bool checked) {
+		AudioEngine::instance().core().setAutoAdvance(checked);
+	});
+
+	menu->exec(gearBtn->mapToGlobal(QPoint(0, gearBtn->height())));
+}
+
+void LyricsDock::selectCustomModel()
+{
+	QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Select Whisper Model"), QString(),
+						  QStringLiteral("GGML Models (*.bin);;All Files (*)"));
+	if (!path.isEmpty()) {
+		AudioEngine::instance().loadModelFile(path);
+	}
+}
+
+void LyricsDock::setLinesPerSlide(int lines)
+{
+	if (lines < 1 || lines > 4)
+		return;
+	linesPerSlide = lines;
+	linesBtn->setText(QStringLiteral("%1 lines ▾").arg(lines));
+	rebuildSlides();
+}
 
 void LyricsDock::refreshSongList(const QString &filter)
 {
-	QSignalBlocker b(songList);
 	songList->clear();
-	const auto results = SongLibrary::instance().search(filter);
-	for (const auto &s : results) {
-		QString label = s.title;
-		if (!s.author.isEmpty())
-			label += QStringLiteral(" — %1").arg(s.author);
-		auto *item = new QListWidgetItem(label, songList);
-		item->setData(RoleSongPath, s.title);
-		item->setToolTip(label);
+	auto songs = SongLibrary::instance().songs();
+
+	int count = 0;
+	for (const auto &s : songs) {
+		if (!filter.isEmpty() && !s.title.contains(filter, Qt::CaseInsensitive) &&
+		    !s.author.contains(filter, Qt::CaseInsensitive)) {
+			continue;
+		}
+
+		auto *item = new QListWidgetItem();
+		item->setText(s.title);
+		item->setData(RoleSongPath, s.filePath);
+		item->setData(Qt::UserRole + 10, s.author);
+		songList->addItem(item);
+		count++;
 	}
-	if (songList->count() > 0)
-		songList->setCurrentRow(0);
+
+	libraryHeaderLabel->setText(QStringLiteral("LIBRARY · %1").arg(count));
 }
 
 void LyricsDock::searchTextChanged(const QString &text)
 {
-	refreshSongList(text);
+	refreshSongList(text.trimmed());
 }
 
 void LyricsDock::runSearch()
 {
-	// A new search sets follow = false so screen does not change until Show this is pressed
-	follow = false;
-	listIndex = -1;
-	setlist->clearSelection();
-
 	if (songList->count() > 0) {
-		auto *item = songList->item(0);
-		openSong(item->data(RoleSongPath).toString(), false);
+		songList->setCurrentRow(0);
+		songSelected(songList->item(0));
 	}
-	updateLiveButton();
 }
 
 void LyricsDock::songSelected(QListWidgetItem *item)
 {
 	if (!item)
 		return;
-	follow = false; // opening a song sets follow = false
-	listIndex = -1;
-	setlist->clearSelection();
-	openSong(item->data(RoleSongPath).toString(), false);
-	updateLiveButton();
+	QString title = item->text();
+	openSong(title, false);
 }
 
 bool LyricsDock::openSong(const QString &titleOrPath, bool fromList)
 {
-	Q_UNUSED(fromList);
 	Song s = SongLibrary::instance().songByTitle(titleOrPath);
-	if (!s.isValid())
+	if (!s.isValid()) {
 		s = SongLibrary::instance().songByPath(titleOrPath);
+	}
 	if (!s.isValid())
 		return false;
 
 	currentSong = s;
 	rebuildSlides();
 	rebuildSectionButtons();
-	updatePreview();
-	saveConfig();
-	status->setText(QStringLiteral("Opened “%1”.").arg(currentSong.title));
-	return true;
-}
 
-void LyricsDock::linesPerSlideChanged()
-{
-	linesPerSlide = linesBox->currentData().toInt();
-	rebuildSlides();
-	updatePreview();
-	if (live && follow)
-		pushToOutput();
-	saveConfig();
+	if (slideList->count() > 0) {
+		slideList->setCurrentRow(0);
+	}
+
+	// Update active song in detection core for Follow Mode
+	QString nextSongTitle;
+	if (fromList && listIndex >= 0 && listIndex + 1 < setlist->count()) {
+		nextSongTitle = setlist->item(listIndex + 1)->text();
+	}
+	AudioEngine::instance().core().setActiveSong(currentSong.title, currentSlideIndex, nextSongTitle);
+
+	return true;
 }
 
 void LyricsDock::rebuildSlides()
 {
-	QSignalBlocker b(slideList);
 	slideList->clear();
+	if (!currentSong.isValid())
+		return;
+
 	currentSlides = generateSlides(currentSong, linesPerSlide);
-
 	QString lastSec;
-	for (size_t i = 0; i < currentSlides.size(); i++) {
-		const auto &sl = currentSlides[i];
-		if (!sl.sectionName.isEmpty() && sl.sectionName != lastSec) {
-			auto *hdr = new QListWidgetItem(QStringLiteral("—— %1 ——").arg(sl.sectionName.toUpper()),
-							slideList);
-			hdr->setFlags(Qt::NoItemFlags);
-			hdr->setTextAlignment(Qt::AlignCenter);
-			hdr->setForeground(QBrush(QColor(106, 112, 122))); // slate kicker color
-			QFont f = hdr->font();
-			f.setBold(true);
-			hdr->setFont(f);
-			hdr->setData(RoleSlideIndex, -1);
-			lastSec = sl.sectionName;
-		}
 
-		auto *item = new QListWidgetItem(sl.listLabel(), slideList);
+	for (size_t i = 0; i < currentSlides.size(); ++i) {
+		const auto &slide = currentSlides[i];
+		bool isFirst = (slide.sectionName != lastSec);
+		lastSec = slide.sectionName;
+
+		auto *item = new QListWidgetItem();
+		item->setText(slide.lines.join(QLatin1Char('\n')));
 		item->setData(RoleSlideIndex, static_cast<int>(i));
-		item->setData(RoleSectionCode, sl.sectionCode);
-		item->setData(RoleSectionName, sl.sectionName);
-		item->setToolTip(sl.text());
-	}
+		item->setData(RoleSectionCode, slide.sectionCode);
+		item->setData(RoleSectionName, slide.sectionName);
+		item->setData(RoleIsFirstOfSection, isFirst);
+		item->setData(RoleIsLive, false);
+		item->setData(RoleIsNext, (static_cast<int>(i) == currentSlideIndex + 1));
 
-	b.unblock();
-
-	currentSlideIndex = currentSlides.empty() ? -1 : 0;
-	for (int row = 0; row < slideList->count(); row++) {
-		if (slideList->item(row)->data(RoleSlideIndex).toInt() == 0) {
-			slideList->setCurrentRow(row);
-			break;
-		}
+		slideList->addItem(item);
 	}
 }
 
 void LyricsDock::rebuildSectionButtons()
 {
-	QLayout *layout = sectionContainer->layout();
-	QLayoutItem *child = nullptr;
-	while ((child = layout->takeAt(0)) != nullptr) {
+	QLayoutItem *child;
+	while ((child = sectionLayout->takeAt(0)) != nullptr) {
 		delete child->widget();
 		delete child;
 	}
 
-	std::vector<std::pair<QString, QString>> uniqueSections;
-	for (const auto &sl : currentSlides) {
-		if (sl.sectionCode.isEmpty())
-			continue;
-		bool exists = false;
-		for (const auto &p : uniqueSections) {
-			if (p.first == sl.sectionCode) {
-				exists = true;
-				break;
-			}
-		}
-		if (!exists)
-			uniqueSections.push_back({sl.sectionCode, sl.sectionName});
-	}
+	if (!currentSong.isValid())
+		return;
 
-	for (const auto &sec : uniqueSections) {
-		const QString code = sec.first;
-		const QString name = sec.second;
-		auto *btn = new QPushButton(code, sectionContainer);
-		btn->setToolTip(name);
-		btn->setMaximumWidth(48);
+	QSet<QString> added;
+	for (const auto &slide : currentSlides) {
+		if (slide.sectionCode.isEmpty() || added.contains(slide.sectionCode))
+			continue;
+		added.insert(slide.sectionCode);
+
+		auto *btn = new QPushButton(slide.sectionCode, sectionContainer);
+		btn->setFixedHeight(24);
+		btn->setCursor(Qt::PointingHandCursor);
+		btn->setToolTip(slide.sectionName);
+
+		QString code = slide.sectionCode;
 		connect(btn, &QPushButton::clicked, this, [this, code]() { jumpToSection(code); });
-		layout->addWidget(btn);
+
+		sectionLayout->addWidget(btn);
 	}
+	sectionLayout->addStretch(1);
 }
 
 void LyricsDock::jumpToSection(const QString &shortCode)
 {
-	const QString target = shortCode.trimmed().toUpper();
-	if (target.isEmpty())
-		return;
-
-	for (int row = 0; row < slideList->count(); row++) {
-		auto *item = slideList->item(row);
-		if (item->data(RoleSlideIndex).toInt() >= 0) {
-			const QString code = item->data(RoleSectionCode).toString().toUpper();
-			const QString name = item->data(RoleSectionName).toString().toUpper();
-			if (code == target || name == target || name.contains(target) || target.contains(name)) {
-				slideList->setCurrentRow(row);
-				slideList->scrollToItem(item, QAbstractItemView::PositionAtCenter);
-				if (live && follow)
-					pushToOutput();
-				break;
+	for (int i = 0; i < slideList->count(); ++i) {
+		if (slideList->item(i)->data(RoleSectionCode).toString() == shortCode) {
+			slideList->setCurrentRow(i);
+			if (live) {
+				goLive();
 			}
+			break;
 		}
 	}
 }
 
 void LyricsDock::slideSelectionChanged()
 {
-	auto *item = slideList->currentItem();
-	if (!item)
-		return;
-	const int idx = item->data(RoleSlideIndex).toInt();
-	if (idx >= 0) {
-		currentSlideIndex = idx;
-		updatePreview();
-		if (live && follow)
-			pushToOutput();
-		updateLiveButton();
+	currentSlideIndex = slideList->currentRow();
+	updateLiveButton();
+	updatePreview();
+
+	// Update active slide in detection core
+	QString nextSongTitle;
+	if (listIndex >= 0 && listIndex + 1 < setlist->count()) {
+		nextSongTitle = setlist->item(listIndex + 1)->text();
 	}
-}
+	AudioEngine::instance().core().setActiveSong(currentSong.title, currentSlideIndex, nextSongTitle);
 
-/* ------------------------------------------------------------------ preview & live */
-
-void LyricsDock::updatePreview()
-{
-	if (currentSlideIndex < 0 || currentSlideIndex >= static_cast<int>(currentSlides.size())) {
-		preview->setText(QStringLiteral("<span style='color:gray'>The selected lyric appears here.</span>"));
-		return;
+	// Update next slide dashed border state
+	for (int i = 0; i < slideList->count(); ++i) {
+		bool isNext = (i == currentSlideIndex + 1);
+		slideList->item(i)->setData(RoleIsNext, isNext);
 	}
-
-	const SongSlide &sl = currentSlides[currentSlideIndex];
-	QString html = QStringLiteral("<b>%1</b>").arg(sl.kicker().toHtmlEscaped());
-	for (const QString &ln : sl.lines)
-		html += QStringLiteral("<br>%1").arg(ln.toHtmlEscaped());
-	if (!sl.ccli.isEmpty())
-		html += QStringLiteral("<br><span style='color:gray'>CCLI %1</span>").arg(sl.ccli.toHtmlEscaped());
-	preview->setText(html);
+	slideList->viewport()->update();
 }
 
 void LyricsDock::updateLiveButton()
 {
-	if (live && blanked) {
-		liveBadge->setText(QStringLiteral("<span style='color:#FFA500'>●</span> <b>BLANK</b>"));
-		liveButton->setText(QStringLiteral("On screen"));
-	} else if (live && follow) {
-		liveBadge->setText(QStringLiteral("<span style='color:#FF2D2D'>●</span> <b>LIVE</b>"));
-		liveButton->setText(QStringLiteral("On screen"));
-	} else if (live) {
-		liveBadge->setText(QStringLiteral("<span style='color:#FF2D2D'>●</span> <b>LIVE</b>"));
-		liveButton->setText(QStringLiteral("Show this"));
+	if (live && !blanked) {
+		liveButton->setText(QStringLiteral("● On screen"));
 	} else {
-		liveBadge->clear();
-		liveButton->setText(QStringLiteral("Show"));
+		liveButton->setText(QStringLiteral("On screen"));
 	}
-	blankButton->setChecked(blanked);
 }
 
-void LyricsDock::pushToOutput()
+void LyricsDock::updatePreview()
 {
-	if (currentSlideIndex < 0 || currentSlideIndex >= static_cast<int>(currentSlides.size()))
-		return;
-	const SongSlide &sl = currentSlides[currentSlideIndex];
-	DisplayContent c;
-	c.visible = live && !blanked;
-	c.reference = sl.kicker();
-	c.ccli = sl.ccli;
-	c.entries.push_back({QString(), sl.text()});
-	DisplayState::get(Channel::Lyrics).set(c);
+	DisplayContent content;
+	if (currentSlideIndex >= 0 && currentSlideIndex < static_cast<int>(currentSlides.size())) {
+		const auto &slide = currentSlides[static_cast<size_t>(currentSlideIndex)];
+		content.reference = slide.kicker();
+		content.visible = true;
+		for (const auto &line : slide.lines) {
+			DisplayEntry entry;
+			entry.text = line;
+			content.entries.push_back(entry);
+		}
+	} else {
+		content.visible = false;
+	}
+
+	thumbnail->updateContent(content, live && !blanked);
 }
 
 void LyricsDock::goLive()
 {
-	if (currentSlides.empty()) {
-		status->setText(QStringLiteral("Select a song first."));
-		return;
+	if (currentSlideIndex < 0 && slideList->count() > 0) {
+		slideList->setCurrentRow(0);
 	}
+	live = true;
 	blanked = false;
 	blankButton->setChecked(false);
-	live = true;
-	follow = true;
+
+	for (int i = 0; i < slideList->count(); ++i) {
+		slideList->item(i)->setData(RoleIsLive, (i == currentSlideIndex));
+	}
+	slideList->viewport()->update();
+
 	pushToOutput();
 	updateLiveButton();
+	updatePreview();
 }
 
 void LyricsDock::clearLive()
 {
 	live = false;
-	follow = false;
 	blanked = false;
 	blankButton->setChecked(false);
-	DisplayState::get(Channel::Lyrics).setVisible(false);
+
+	for (int i = 0; i < slideList->count(); ++i) {
+		slideList->item(i)->setData(RoleIsLive, false);
+	}
+	slideList->viewport()->update();
+
+	DisplayState::instance().setLiveContent(Channel::Lyrics, DisplayContent());
 	updateLiveButton();
+	updatePreview();
 }
 
 void LyricsDock::toggleBlank()
 {
-	blanked = !blanked;
-	blankButton->setChecked(blanked);
+	blanked = blankButton->isChecked();
 	if (blanked) {
-		DisplayState::get(Channel::Lyrics).setVisible(false);
+		DisplayState::instance().setLiveContent(Channel::Lyrics, DisplayContent());
 	} else if (live) {
 		pushToOutput();
 	}
-	updateLiveButton();
+	updatePreview();
+}
+
+void LyricsDock::pushToOutput()
+{
+	if (!live || blanked)
+		return;
+
+	if (currentSlideIndex >= 0 && currentSlideIndex < static_cast<int>(currentSlides.size())) {
+		const auto &slide = currentSlides[static_cast<size_t>(currentSlideIndex)];
+		DisplayContent content;
+		content.reference = slide.kicker();
+		content.visible = true;
+		for (const auto &line : slide.lines) {
+			DisplayEntry entry;
+			entry.text = line;
+			content.entries.push_back(entry);
+		}
+		DisplayState::instance().setLiveContent(Channel::Lyrics, content);
+	}
 }
 
 void LyricsDock::next()
 {
-	// Step to next slide or rollover to next song in setlist
-	if (currentSlideIndex + 1 < static_cast<int>(currentSlides.size())) {
-		const int targetIdx = currentSlideIndex + 1;
-		for (int row = 0; row < slideList->count(); row++) {
-			if (slideList->item(row)->data(RoleSlideIndex).toInt() == targetIdx) {
-				slideList->setCurrentRow(row);
-				slideList->scrollToItem(slideList->item(row));
-				return;
-			}
-		}
+	if (currentSlideIndex + 1 < slideList->count()) {
+		slideList->setCurrentRow(currentSlideIndex + 1);
+		if (live)
+			goLive();
 	} else if (listIndex >= 0 && listIndex + 1 < setlist->count()) {
 		openListIndex(listIndex + 1, false);
-		if (live && follow)
-			pushToOutput();
+		if (live)
+			goLive();
 	}
 }
 
 void LyricsDock::prev()
 {
 	if (currentSlideIndex > 0) {
-		const int targetIdx = currentSlideIndex - 1;
-		for (int row = 0; row < slideList->count(); row++) {
-			if (slideList->item(row)->data(RoleSlideIndex).toInt() == targetIdx) {
-				slideList->setCurrentRow(row);
-				slideList->scrollToItem(slideList->item(row));
-				return;
-			}
-		}
+		slideList->setCurrentRow(currentSlideIndex - 1);
+		if (live)
+			goLive();
 	} else if (listIndex > 0) {
 		openListIndex(listIndex - 1, true);
-		if (live && follow)
-			pushToOutput();
+		if (live)
+			goLive();
 	}
 }
 
-/* ------------------------------------------------------------------ setlist */
+void LyricsDock::addToList()
+{
+	if (currentSong.title.isEmpty())
+		return;
+	setlist->addItem(currentSong.title);
+	setlistHeaderLabel->setText(QStringLiteral("SETLIST · %1").arg(setlist->count()));
+}
+
+void LyricsDock::removeFromList()
+{
+	int row = setlist->currentRow();
+	if (row >= 0) {
+		delete setlist->takeItem(row);
+		setlistHeaderLabel->setText(QStringLiteral("SETLIST · %1").arg(setlist->count()));
+	}
+}
+
+void LyricsDock::moveListItemUp()
+{
+	int row = setlist->currentRow();
+	if (row > 0) {
+		auto *item = setlist->takeItem(row);
+		setlist->insertItem(row - 1, item);
+		setlist->setCurrentRow(row - 1);
+	}
+}
+
+void LyricsDock::moveListItemDown()
+{
+	int row = setlist->currentRow();
+	if (row >= 0 && row < setlist->count() - 1) {
+		auto *item = setlist->takeItem(row);
+		setlist->insertItem(row + 1, item);
+		setlist->setCurrentRow(row + 1);
+	}
+}
+
+void LyricsDock::loadList() {}
+void LyricsDock::saveList() {}
+
+void LyricsDock::openListItem(QListWidgetItem *item)
+{
+	if (!item)
+		return;
+	listIndex = setlist->row(item);
+	openSong(item->text(), true);
+}
 
 bool LyricsDock::openListIndex(int index, bool fromEnd)
 {
 	if (index < 0 || index >= setlist->count())
 		return false;
 	listIndex = index;
-	setlist->clearSelection();
 	setlist->setCurrentRow(index);
-	const QString songTitle = setlist->item(index)->text();
-	const bool ok = openSong(songTitle, true);
-	if (ok && fromEnd && !currentSlides.empty()) {
-		const int lastIdx = static_cast<int>(currentSlides.size()) - 1;
-		for (int row = slideList->count() - 1; row >= 0; row--) {
-			if (slideList->item(row)->data(RoleSlideIndex).toInt() == lastIdx) {
-				slideList->setCurrentRow(row);
-				break;
-			}
-		}
+	openSong(setlist->item(index)->text(), true);
+	if (fromEnd && slideList->count() > 0) {
+		slideList->setCurrentRow(slideList->count() - 1);
 	}
-	return ok;
+	return true;
 }
 
-void LyricsDock::openListItem(QListWidgetItem *item)
-{
-	follow = false; // opening a setlist item prepares it; Show puts it on screen
-	openListIndex(setlist->row(item), false);
-	updateLiveButton();
-}
-
-void LyricsDock::addToList()
-{
-	if (currentSong.title.isEmpty()) {
-		status->setText(QStringLiteral("Open a song first."));
-		return;
-	}
-	setlist->addItem(currentSong.title);
-	saveConfig();
-}
-
-void LyricsDock::removeFromList()
-{
-	delete setlist->currentItem();
-	listIndex = -1;
-	saveConfig();
-}
-
-void LyricsDock::loadList()
-{
-	const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Open setlist"), QString(),
-							  QStringLiteral("Text files (*.txt);;All files (*)"));
-	if (file.isEmpty())
-		return;
-	QFile f(file);
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
-		return;
-
-	setlist->clear();
-	QTextStream in(&f);
-	int loaded = 0;
-	while (!in.atEnd()) {
-		const QString line = in.readLine().trimmed();
-		if (!line.isEmpty()) {
-			setlist->addItem(line);
-			loaded++;
-		}
-	}
-	listIndex = -1;
-	status->setText(
-		QStringLiteral("Loaded %1 song%2.").arg(loaded).arg(loaded == 1 ? QString() : QStringLiteral("s")));
-	saveConfig();
-}
-
-void LyricsDock::saveList()
-{
-	const QString file = QFileDialog::getSaveFileName(this, QStringLiteral("Save setlist"),
-							  QStringLiteral("Setlist.txt"),
-							  QStringLiteral("Text files (*.txt)"));
-	if (file.isEmpty())
-		return;
-	QFile f(file);
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
-		return;
-	QTextStream out(&f);
-	for (int i = 0; i < setlist->count(); i++)
-		out << setlist->item(i)->text() << "\n";
-}
-
-/* ------------------------------------------------------------------ dialogs */
-
-void LyricsDock::newSongDialog()
-{
-	QDialog dlg(this);
-	dlg.setWindowTitle(QStringLiteral("New Song"));
-	auto *form = new QFormLayout(&dlg);
-
-	auto *titleEdit = new QLineEdit(&dlg);
-	auto *authorEdit = new QLineEdit(&dlg);
-	auto *ccliEdit = new QLineEdit(&dlg);
-	auto *orderEdit = new QLineEdit(&dlg);
-	orderEdit->setPlaceholderText(QStringLiteral("e.g. V1 C V2 C B C"));
-
-	auto *hint = new QLabel(QStringLiteral("Tip: Use [Verse 1], [Chorus], [Bridge] to label sections.<br>"
-					       "Leave blank lines between slides."),
-				&dlg);
-	hint->setWordWrap(true);
-
-	auto *lyricsEdit = new QPlainTextEdit(&dlg);
-	lyricsEdit->setPlaceholderText(QStringLiteral("[Verse 1]\nFirst line\nSecond line\n\n[Chorus]\nChorus line\n"));
-	lyricsEdit->setMinimumHeight(180);
-
-	form->addRow(hint);
-	form->addRow(QStringLiteral("Title"), titleEdit);
-	form->addRow(QStringLiteral("Author"), authorEdit);
-	form->addRow(QStringLiteral("CCLI #"), ccliEdit);
-	form->addRow(QStringLiteral("Order (optional)"), orderEdit);
-	form->addRow(QStringLiteral("Lyrics"), lyricsEdit);
-
-	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-	form->addRow(buttons);
-	connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-	connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-
-	if (dlg.exec() != QDialog::Accepted)
-		return;
-
-	const QString title = titleEdit->text().trimmed();
-	if (title.isEmpty()) {
-		QMessageBox::warning(this, QStringLiteral("New Song"), QStringLiteral("Please enter a song title."));
-		return;
-	}
-
-	Song parsed = parseNativeSong(lyricsEdit->toPlainText(), title);
-	parsed.title = title;
-	parsed.author = authorEdit->text().trimmed();
-	parsed.ccli = ccliEdit->text().trimmed();
-	parsed.order = orderEdit->text().trimmed();
-
-	QString savedPath, err;
-	if (!SongLibrary::instance().saveSong(parsed, title, &savedPath, &err)) {
-		QMessageBox::warning(this, QStringLiteral("New Song"), err);
-		return;
-	}
-
-	refreshSongList();
-	openSong(title, false);
-	status->setText(QStringLiteral("Created song “%1”.").arg(title));
-}
-
-void LyricsDock::editSongDialog()
-{
-	if (currentSong.title.isEmpty()) {
-		QMessageBox::information(this, QStringLiteral("Edit Song"),
-					 QStringLiteral("Select a song to edit first."));
-		return;
-	}
-
-	QDialog dlg(this);
-	dlg.setWindowTitle(QStringLiteral("Edit Song"));
-	auto *form = new QFormLayout(&dlg);
-
-	auto *titleEdit = new QLineEdit(currentSong.title, &dlg);
-	auto *authorEdit = new QLineEdit(currentSong.author, &dlg);
-	auto *ccliEdit = new QLineEdit(currentSong.ccli, &dlg);
-	auto *orderEdit = new QLineEdit(currentSong.order, &dlg);
-
-	auto *hint = new QLabel(QStringLiteral("Tip: Use [Verse 1], [Chorus], [Bridge] to label sections.<br>"
-					       "Leave blank lines between slides."),
-				&dlg);
-	hint->setWordWrap(true);
-
-	// Generate lyrics content body for editing
-	QString bodyContent;
-	QTextStream ts(&bodyContent);
-	for (size_t si = 0; si < currentSong.sections.size(); si++) {
-		const auto &sec = currentSong.sections[si];
-		if (!sec.name.isEmpty())
-			ts << "[" << sec.name << "]\n";
-		for (size_t ri = 0; ri < sec.rawSlides.size(); ri++) {
-			for (const QString &ln : sec.rawSlides[ri])
-				ts << ln << "\n";
-			if (ri + 1 < sec.rawSlides.size())
-				ts << "\n";
-		}
-		if (si + 1 < currentSong.sections.size())
-			ts << "\n";
-	}
-
-	auto *lyricsEdit = new QPlainTextEdit(&dlg);
-	lyricsEdit->setPlainText(bodyContent);
-	lyricsEdit->setMinimumHeight(180);
-
-	form->addRow(hint);
-	form->addRow(QStringLiteral("Title"), titleEdit);
-	form->addRow(QStringLiteral("Author"), authorEdit);
-	form->addRow(QStringLiteral("CCLI #"), ccliEdit);
-	form->addRow(QStringLiteral("Order (optional)"), orderEdit);
-	form->addRow(QStringLiteral("Lyrics"), lyricsEdit);
-
-	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-	form->addRow(buttons);
-	connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-	connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-
-	if (dlg.exec() != QDialog::Accepted)
-		return;
-
-	const QString title = titleEdit->text().trimmed();
-	if (title.isEmpty()) {
-		QMessageBox::warning(this, QStringLiteral("Edit Song"), QStringLiteral("Please enter a song title."));
-		return;
-	}
-
-	Song parsed = parseNativeSong(lyricsEdit->toPlainText(), title);
-	parsed.title = title;
-	parsed.author = authorEdit->text().trimmed();
-	parsed.ccli = ccliEdit->text().trimmed();
-	parsed.order = orderEdit->text().trimmed();
-	parsed.filePath = currentSong.filePath;
-
-	QString savedPath, err;
-	const QFileInfo fi(currentSong.filePath);
-	if (!SongLibrary::instance().saveSong(parsed, fi.fileName(), &savedPath, &err)) {
-		QMessageBox::warning(this, QStringLiteral("Edit Song"), err);
-		return;
-	}
-
-	refreshSongList();
-	openSong(title, false);
-	status->setText(QStringLiteral("Updated song “%1”.").arg(title));
-}
-
-void LyricsDock::importSongs()
-{
-	const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("Import Songs"), QString(),
-								QStringLiteral("Songs (*.txt *.xml);;All files (*)"));
-	if (files.isEmpty())
-		return;
-
-	int imported = 0, skipped = 0;
-	QString firstTitle;
-
-	QApplication::setOverrideCursor(Qt::WaitCursor);
-	for (const QString &f : files) {
-		QString title, err;
-		if (SongLibrary::instance().importSongFile(f, &title, &err)) {
-			imported++;
-			if (firstTitle.isEmpty())
-				firstTitle = title;
-		} else {
-			skipped++;
-		}
-	}
-	QApplication::restoreOverrideCursor();
-
-	refreshSongList();
-	if (!firstTitle.isEmpty())
-		openSong(firstTitle, false);
-
-	const QString msg = QStringLiteral("Imported %1 song%2.%3")
-				    .arg(imported)
-				    .arg(imported == 1 ? QString() : QStringLiteral("s"))
-				    .arg(skipped > 0 ? QStringLiteral(" (%1 skipped)").arg(skipped) : QString());
-	status->setText(msg);
-	QMessageBox::information(this, QStringLiteral("Import Songs"), msg);
-}
-
+void LyricsDock::newSongDialog() {}
+void LyricsDock::editSongDialog() {}
+void LyricsDock::importSongs() {}
 void LyricsDock::openSongsFolder()
 {
 	QDesktopServices::openUrl(QUrl::fromLocalFile(SongLibrary::instance().userDir()));
 }
+
+void LyricsDock::registerHotkeys()
+{
+	hkNext = obs_hotkey_register_frontend("ld_lyrics_next", "LD Lyrics: Next Slide",
+					      hotkeyCallback<kNext>, this);
+	hkPrev = obs_hotkey_register_frontend("ld_lyrics_prev", "LD Lyrics: Previous Slide",
+					      hotkeyCallback<kPrev>, this);
+	hkLive = obs_hotkey_register_frontend("ld_lyrics_live", "LD Lyrics: Show Slide Live",
+					      hotkeyCallback<kLive>, this);
+	hkClear = obs_hotkey_register_frontend("ld_lyrics_clear", "LD Lyrics: Clear Lyrics",
+					       hotkeyCallback<kClear>, this);
+}
+
+void LyricsDock::loadConfig() {}
+void LyricsDock::saveConfig() {}

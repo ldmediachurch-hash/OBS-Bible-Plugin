@@ -1,5 +1,5 @@
 /*
-LD Scripture for OBS
+LD Worship & Word for OBS
 Copyright (C) 2026 LD Media Church
 
 This program is free software; you can redistribute it and/or modify
@@ -10,7 +10,9 @@ the Free Software Foundation; either version 2 of the License, or
 
 #pragma once
 
+#include "display-state.hpp"
 #include "lyrics.hpp"
+#include "mini-thumbnail.hpp"
 
 #include <obs.h>
 
@@ -19,12 +21,15 @@ the Free Software Foundation; either version 2 of the License, or
 #include <vector>
 
 class QComboBox;
+class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
+class QSplitter;
 class QToolButton;
+class QVBoxLayout;
 
 class LyricsDock : public QWidget {
 	Q_OBJECT
@@ -49,9 +54,11 @@ private slots:
 	void searchTextChanged(const QString &text);
 	void songSelected(QListWidgetItem *item);
 	void slideSelectionChanged();
-	void linesPerSlideChanged();
+	void setLinesPerSlide(int lines);
 	void addToList();
 	void removeFromList();
+	void moveListItemUp();
+	void moveListItemDown();
 	void loadList();
 	void saveList();
 	void openListItem(QListWidgetItem *item);
@@ -59,8 +66,15 @@ private slots:
 	void editSongDialog();
 	void importSongs();
 	void openSongsFolder();
+	void openGearMenu();
+	void selectCustomModel();
+
+protected:
+	void resizeEvent(QResizeEvent *event) override;
+	void keyPressEvent(QKeyEvent *event) override;
 
 private:
+	void setupLayout();
 	void refreshSongList(const QString &filter = QString());
 	void rebuildSlides();
 	void rebuildSectionButtons();
@@ -70,18 +84,46 @@ private:
 	void loadConfig();
 	void registerHotkeys();
 	bool openListIndex(int index, bool fromEnd = false);
+	void updateResponsiveLayout(bool wide);
 
+	// Layout widgets
+	QHBoxLayout *m_topLayout = nullptr;
+	QWidget *m_leftColumn = nullptr;
+	QWidget *m_rightColumn = nullptr;
+	QVBoxLayout *m_leftLayout = nullptr;
+	QVBoxLayout *m_rightLayout = nullptr;
+
+	// Search & Gear
 	QLineEdit *searchEdit = nullptr;
-	QComboBox *linesBox = nullptr;
+	QToolButton *gearBtn = nullptr;
+
+	// Library section
+	QLabel *libraryHeaderLabel = nullptr;
+	QToolButton *importBtn = nullptr;
 	QListWidget *songList = nullptr;
-	QListWidget *slideList = nullptr;
+
+	// Slides section
+	QLabel *slidesHeaderLabel = nullptr;
+	QToolButton *linesBtn = nullptr;
 	QWidget *sectionContainer = nullptr;
-	QLabel *preview = nullptr;
-	QLabel *status = nullptr;
-	QLabel *liveBadge = nullptr;
+	QHBoxLayout *sectionLayout = nullptr;
+	QListWidget *slideList = nullptr;
+
+	// Thumbnail & Controls
+	MiniProgramThumbnail *thumbnail = nullptr;
+	QPushButton *prevBtn = nullptr;
 	QPushButton *liveButton = nullptr;
 	QPushButton *blankButton = nullptr;
 	QPushButton *clearButton = nullptr;
+	QPushButton *nextBtn = nullptr;
+	QLabel *shortcutHintLabel = nullptr;
+
+	// Setlist section
+	QLabel *setlistHeaderLabel = nullptr;
+	QToolButton *setlistAddBtn = nullptr;
+	QToolButton *setlistRemBtn = nullptr;
+	QToolButton *setlistUpBtn = nullptr;
+	QToolButton *setlistDownBtn = nullptr;
 	QListWidget *setlist = nullptr;
 
 	Song currentSong;
@@ -93,10 +135,10 @@ private:
 	bool blanked = false;
 	int listIndex = -1;
 	int linesPerSlide = 2;
+	bool m_isWideLayout = false;
 
 	obs_hotkey_id hkNext = OBS_INVALID_HOTKEY_ID;
 	obs_hotkey_id hkPrev = OBS_INVALID_HOTKEY_ID;
 	obs_hotkey_id hkLive = OBS_INVALID_HOTKEY_ID;
 	obs_hotkey_id hkClear = OBS_INVALID_HOTKEY_ID;
-	obs_hotkey_id hkBlank = OBS_INVALID_HOTKEY_ID;
 };

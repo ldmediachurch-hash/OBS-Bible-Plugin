@@ -1,98 +1,98 @@
-# LD Worship & Word for OBS (Scripture & Lyrics)
+# LD Worship & Word for OBS (Scripture & Lyrics) v1.2.0
 
-Scripture and song lyrics lower thirds for church livestreams, controlled from docks inside OBS. Fully offline.
+Scripture and song lyrics lower thirds for church livestreams, controlled from docks inside OBS. Fully offline speech detection with Whisper AI.
 
 By LD Media Church: *empowering church media teams to create excellence on any budget.*
 
-## What it does
+---
 
-### Unified LD Worship & Word Dock (Docks → LD Worship & Word)
-- **Mode Switcher:** Instant top tab switching between **`[ 🎵 Worship ]`** and **`[ 📖 Word ]`** (or press `Tab` / `Ctrl+Tab`).
-- **Audio Assist & Live VU Confidence Meter:**
-  - Select any audio input in your OBS mixer (e.g. `Pastor Lapel`, `Worship Mic`, `Board Feed`).
-  - Sleek 10-bar LED audio meter bounces in real-time to confirm audio signal is entering cleanly.
-  - Smart suggestion banner pops up when scripture or lyrics are detected:
-    `💡 Rom 8:28 (95%) [ Preview ] [ Show ↵ ] [ ✕ ]`
-  - Zero-crash, lock-free background worker thread ensures OBS video encoding is never interrupted.
+## What's New in v1.2.0
 
-### LD Scripture
-- **LD Scripture dock** (Docks → LD Scripture or inside the unified dock):
-  - Search with "Rom 8:28", "1 Cor 13:4-7", "Psalm 23", or keywords like "faith hope charity".
-  - Pick a translation, plus an optional second translation shown side by side.
-  - Preview the verse, then **Show** and **Clear**, and **◀ ▶** to step verse by verse.
-  - Service list: add the pastor's scriptures before service, save and open lists. When you reach the end of a range, ▶ moves on to the next item on the list.
-  - Hotkeys (Settings → Hotkeys → "LD Scripture"): Next verse, Previous verse, Show, Clear.
-- **Bibles**:
-  - KJV, WEB (World English Bible), ASV and BBE come built in. They're all public domain.
-  - **Bibles → Import Bible** adds your own XML or JSON Bible files:
-    - Zefania XML
-    - OSIS
-    - OpenSong
-    - "bible / book / chapter / verse" XML
-    - Common JSON layouts
-  - Book names stay in the Bible's own language. For example, a Yoruba Bible shows and searches "Jòhánù 3:16", and "John 3:16" works too.
+### Complete Dock Redesign (Clean, Focused, High-Confidence)
+- **Visual Hierarchy:** White primary **Show / On screen** button draws operator focus to the single primary action.
+- **Unified Live State:** Confirmed in three places at once: the white-outlined slide with `● LIVE` badge, the "On screen" button, and the 16:9 **● ON AIR** thumbnail.
+- **16:9 Mini Program Thumbnail:** True rendered preview of the lower third graphic replacing the old plain text box, giving the operator confidence in what viewers actually see.
+- **Next Slide Guidance:** Next slide is outlined with a subtle dashed border so the operator knows exactly what the Next key (`Space` or `▶`) will display.
+- **Less Noise:** No repeated "VERSE 1 ·" labels on every row. The section header appears once per section, and each card displays the slide's actual lines.
+- **Compact Audio Row:** Audio source dropdown, 5-bar vertical signal meter, and `● Listening` status pill on one compact line. Clicking the status pill gives instant access to AI and device options.
+- **Slide-in Suggestion Card:** Clean banner displaying `HEARD · 95%` (or `TENTATIVE · 80%`), detected reference, a confidence indicator bar, and single-click **Show** / **Preview** / **✕**.
+- **Section Chips:** Compact `V1`, `V2`, `C`, `B` chips with the active section filled in white.
+- **Numbered Setlist:** Setlist displays row numbers (1, 2, 3...) with internal drag reordering and compact icon buttons (`+`, `−`, `↑`, `↓`).
+- **Sticky Bottom Control Bar:** Pinned `◀`, `On screen` (wide white primary), `Blank`, `Clear`, and `▶` buttons with a persistent keyboard hint row:
+  `Space next · ⇧Space back · Enter show · B blank · Esc clear`
+- **Responsive 2-Column Layout:** When the dock is wider than ~620 px, it automatically switches to a side-by-side view (Left: Library/Setlist, Right: Slides/Thumbnail/Controls).
 
-### LD Lyrics
-- **LD Lyrics dock** (Docks → LD Lyrics or inside the unified dock):
-  - Search your song library by title or lyrics. Double-click or press Enter to open a song.
-  - Slide list showing sections (`VERSE 1 · first line…`), with clear visual section dividers.
-  - Up/Down keys in the search box step through the slides.
-  - Section jump buttons (`V1`, `V2`, `C`, `B`, `PC`, `T`, `E`) let you instantly jump to any part of the song during spontaneous worship.
-  - **Blank** button keeps the live state while temporarily hiding the lower third during instrumental breaks or speaking.
-  - **Setlist**: queue songs in order for worship, reorder by dragging, save and open setlists. Reaching the end of a song and pressing ▶ automatically rolls over to the first slide of the next song in the setlist.
-  - Configurable **lines per slide** (1 to 4, default 2) automatically formats and chunks lyrics.
-  - Hotkeys (Settings → Hotkeys → "LD Lyrics"): Next slide, Previous slide, Show, Clear, Blank.
-- **Song Library & Formats**:
-  - Songs are stored as simple UTF-8 text files in your OBS plugin configuration directory (`songs`).
-  - Native `.txt` format supports optional header (`Title:`, `Author:`, `CCLI:`, `Order:`) and `[Verse 1]`, `[Chorus]`, `[Bridge]` tags with blank lines separating slides.
-  - **Songs → Import songs** supports importing native text files and OpenLyrics XML (`.xml`) files from OpenLP and other worship software.
-  - **Songs → New song…** and **Edit current song…** let you paste or edit lyrics directly inside OBS.
-  - Ships with public-domain sample hymns: *Amazing Grace*, *Holy, Holy, Holy*, and *It Is Well with My Soul*.
+---
 
-### Fully Formattable Lower Thirds (Sources: LD Scripture & LD Lyrics)
-Both lower third sources now offer complete visual and design customization:
-- **Background Styles**:
-  - **Light Card:** Clean, modern white card.
-  - **Dark Card:** Elegant dark charcoal card.
-  - **Custom Color Card:** Pick any card color, plus adjust background opacity (0% to 100%).
-  - **Transparent (Floating Text):** Completely removes the background card for sleek, floating lyrics/scriptures directly over the video stream, with soft text shadow for high readability over bright stages.
-  - **Custom Image Background:** Choose your own graphic/branding image file from your computer, with scaling options (**Cover**, **Fit**, **Stretch**) and opacity.
-  - **Corner Rounding:** Tweak corners from sharp modern rectangles (0px) to soft pills (up to 60px).
-- **Drop Shadows**:
-  - Toggle drop shadow on or off.
-  - Tweak shadow intensity / opacity percentage.
-- **Typography & Font Formatting**:
-  - **Font Family:** Select from Inter, Arial, Helvetica, Roboto, Segoe UI, Georgia, Times New Roman, Montserrat, Open Sans.
-  - **Font Weight:** Regular (400), Medium (500), SemiBold (600), Bold (700), ExtraBold (800).
-  - **Numeric Text Size:** Visible, editable number input (16px to 120px) — no hidden slider numbers!
-  - **Max Lines:** Configurable line limit before auto-scaling.
-  - **Text Alignment:** Left, Center, or Right on both Scripture and Lyrics!
-- **Colors & Branding**:
-  - Custom body text color and title/kicker color pickers.
-  - Toggle title/kicker row and red live signal dot on or off.
-- **Placement & Motion**:
-  - Top or Bottom screen positioning.
-  - Independent side margins and top/bottom edge margins.
-  - Smooth fade transition speed (0ms to 2000ms).
-  - Sample card toggle for easy positioning before service.
+### Whisper Speech AI Overhaul (Fast, Accurate, Steady)
 
-## Install
-- **macOS:** open the `.pkg` from the release and restart OBS. The first time, macOS may say it's from an unidentified developer: go to System Settings → Privacy & Security, then **Open Anyway**.
-- **Windows:** unzip the release into `C:\ProgramData\obs-studio\plugins\` and restart OBS.
-- **Linux:** install the `.deb` package or copy `ld-scripture` into `~/.config/obs-studio/plugins/`.
+1. **Sub-Second Latency:**
+   - Window duration optimized to **3.0 s with 0.75 s hop** (configurable).
+   - Set `audio_ctx` matched to window length (150 frames for 3.0 s), eliminating Whisper's default 30-second zero padding and accelerating encoder passes by 5–10×.
+   - Fast greedy decoding with single-segment inference.
+   - Model loaded on a background thread at startup and warmed up with a silent pass.
+   - Hardware acceleration active on Apple Silicon Metal and Windows/Linux AVX2.
+2. **High-Accuracy Speech Detection:**
+   - Default model upgraded to **`ggml-base.en-q5_1`** for reliable comprehension of church names and accents.
+   - Energy-based voice activity gating drops room noise and silent intervals before speech decoding.
+   - Short neutral prompt eliminates book hallucinations during silence.
+3. **LocalAgreement-2 Transcript Stabilizer:**
+   - Words are committed only when confirmed across consecutive sliding windows.
+   - Separate tentative tail provides early detection banners that seamlessly upgrade to committed status without duplicate popups.
+4. **Comprehensive Number Normalizer:**
+   - Converts number words, composites ("twenty-eight" → "28", "one hundred twenty-one" → "121"), ordinals ("first corinthians" → "1 corinthians"), and separators ("8 28" → "8:28").
+   - Fuzzy / phonetic matching tolerates mishearings ("Roman" → Romans, "Jon" → John, "Phillipians" → Philippians, "Habacuc" → Habakkuk, "Revelations" → Revelation).
+5. **Context Memory for Follow-on Verses:**
+   - When a passage is active, preaching references like *"verse 29"*, *"the next verse"*, *"back to verse 28"*, or *"chapter 9"* automatically resolve against the current book and chapter.
+   - Context expires after 5 minutes or when a new book is introduced.
+   - 20-second cooldown prevents repeated suggestions for the same reference.
+6. **Quote Matching Across the Bible:**
+   - Full 5-gram index matches spoken Scripture quotes (e.g. *"for God so loved the world"*, *"the joy of the Lord is your strength"*, *"all things work together for good"*) directly to references.
+7. **Lyrics Follow Mode:**
+   - In Worship mode, detection focuses on the active song: current slide, next 2 slides, section start slides, and the next setlist song.
+   - Looser audio threshold preserves sung vocals over loud stage instrumentation.
+   - Slide prediction tracks next slide matches across consecutive windows.
 
-Then open **Docks → LD Scripture** and **Docks → LD Lyrics**, and add the lower third sources to your sermon and worship scenes.
+---
 
-## Sunday workflow
-1. **Worship:** Set up your worship setlist in **LD Lyrics**. During worship, double-click the opening song and click **Show**. Step through with ▶ or hotkeys. Use section buttons (e.g. `C` for Chorus) when the worship leader repeats sections. Use **Blank** during instrumental breaks.
-2. **Sermon:** Add scriptures to the service list in **LD Scripture**, then double-click and click **Show**. Use ▶ to advance verses. Searching for an unexpected verse keeps what's currently on screen safe until you press **Show this**.
-3. Press **Clear** when transitioning between segments.
+## Getting the Best Detection at Church
 
-## Copyright
-Modern translations and contemporary worship songs are copyrighted. Ensure your church holds appropriate CCLI or performance licenses before broadcasting copyrighted material.
+For the most reliable live detection during Sunday services:
+- **Direct Aux Feed for Preacher:** Feed the plugin the pastor's microphone directly from a mixer aux output, not a room mic or laptop microphone.
+- **Worship Vocal Aux:** For worship, send a dedicated aux mix where the lead vocal is 6–10 dB louder than the band.
+- **Laptop Power & Resources:** Keep the OBS streaming laptop plugged into wall power (laptops throttle CPU/GPU on battery) and close unnecessary heavy background applications.
 
-## Build from source
-This uses the official [OBS plugin template](https://github.com/obsproject/obs-plugintemplate). Pushing a tag like `1.1.0` builds macOS (.pkg), Windows and Ubuntu packages with GitHub Actions and attaches them to a release.
+---
+
+## Evaluation Tool (`tools/ldww-eval`)
+
+The repository includes a standalone offline evaluation CLI (`ldww-eval`) to test detection recall, latency, and false positive rates against ground-truth audio:
+
+```bash
+# Build with CMake option BUILD_EVAL=ON
+cmake -B build -DBUILD_EVAL=ON
+cmake --build build --target ldww-eval
+
+# Run evaluation on synthetic or recorded service audio
+./build/tools/ldww-eval/ldww-eval \
+  --wav tests/eval-synthetic/synthetic_eval.wav \
+  --truth tests/eval-synthetic/ground_truth.csv \
+  --songs-dir data/songs-samples \
+  --verbose
+```
+
+---
+
+## Installation
+
+- **macOS:** Open the `.pkg` from the [Releases](https://github.com/ldmediachurch-hash/OBS-Bible-Plugin/releases) page and restart OBS.
+- **Windows:** Unzip the release package into `C:\ProgramData\obs-studio\plugins\` and restart OBS.
+- **Linux:** Install the `.deb` package or copy `ld-scripture` into `~/.config/obs-studio/plugins/`.
+
+Open **Docks → LD Worship & Word** to start using the plugin.
+
+---
 
 ## Licence
-GPL-2.0-or-later. Inter fonts © The Inter Project Authors (SIL Open Font License, see `data/fonts/OFL.txt`).
+
+GPL-2.0-or-later. Inter fonts © The Inter Project Authors (SIL Open Font License).
