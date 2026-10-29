@@ -880,7 +880,7 @@ void ScriptureDock::importBible()
 		return;
 	}
 
-	refreshTranslations(finalAbbrev, secondaryTranslation);
+	refreshTranslations(finalAbbrev, secondaryBox->currentData().toString());
 
 	int idx = primaryBox->findData(finalAbbrev);
 	if (idx >= 0)
@@ -922,7 +922,7 @@ void ScriptureDock::removeBible()
 		return;
 	}
 
-	refreshTranslations(QStringLiteral("KJV"), secondaryTranslation);
+	refreshTranslations(QStringLiteral("KJV"), secondaryBox->currentData().toString());
 	QMessageBox::information(this, QStringLiteral("Translation Removed"),
 				 QStringLiteral("Translation '%1' has been removed.").arg(currentAbbrev));
 }

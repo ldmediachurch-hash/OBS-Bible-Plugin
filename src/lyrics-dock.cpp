@@ -213,7 +213,6 @@ public:
 		QFontMetrics fmAuthor(authorFont);
 
 		const int margin = 8;
-		const int titleW = static_cast<int>(r.width() * 0.65) - margin;
 		int authorW = 0;
 		if (!author.isEmpty()) {
 			authorW = std::min(fmAuthor.horizontalAdvance(author) + 4, static_cast<int>(r.width() * 0.35));
@@ -221,85 +220,76 @@ public:
 		int titleW = r.width() - margin * 2 - (authorW > 0 ? (authorW + 8) : 0);
 		QString elidedTitle = fmTitle.elidedText(title, Qt::ElideRight, titleW);
 		QRect titleRect(r.left() + margin, r.top(), titleW, r.height());
-		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
 		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, elidedTitle);
 
-		if (!author.isEmpty()) {
-			QFont authorFont = option.font;
-			authorFont.setPointSize(authorFont.pointSize() - 1);
-			if (authorW > 0) {
-				p->setFont(authorFont);
-				p->setPen(QColor(130, 137, 150));
-				const int authorX = r.left() + static_cast<int>(r.width() * 0.65);
-				const int authorW = static_cast<int>(r.width() * 0.35) - margin;
-				QRect authorRect(authorX, r.top(), authorW, r.height());
-				p->drawText(authorRect, Qt::AlignRight | Qt::AlignVCenter, author);
-				QString elidedAuthor = fmAuthor.elidedText(author, Qt::ElideRight, authorW);
-				QRect authorRect(r.right() - margin - authorW, r.top(), authorW, r.height());
-				p->drawText(authorRect, Qt::AlignRight | Qt::AlignVCenter, elidedAuthor);
-			}
-
-			p->restore();
-		}
-
-		QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
-		{
-			return QSize(option.rect.width(), 32);
-		}
-	};
-
-	// Delegate for Setlist with numbered rows
-	class SetlistDelegate : public QStyledItemDelegate {
-	public:
-		explicit SetlistDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
-
-		void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
-		{
-			p->save();
-			p->setRenderHint(QPainter::Antialiasing, true);
-
-			QRect r = option.rect.adjusted(2, 2, -2, -2);
-			bool isSelected = option.state & QStyle::State_Selected;
-
-			if (isSelected) {
-				QPainterPath path;
-				path.addRoundedRect(r, 4, 4);
-				p->fillPath(path, QColor(255, 255, 255, 16));
-				p->fillRect(QRect(r.left(), r.top() + 4, 2, r.height() - 8), Qt::white);
-			}
-
-			QString numStr = QString::number(index.row() + 1);
-			QString title = index.data(Qt::DisplayRole).toString();
-
-			// Row number in muted gray
-			QFont numFont = option.font;
-			numFont.setPointSize(numFont.pointSize() - 1);
-			p->setFont(numFont);
+		if (!author.isEmpty() && authorW > 0) {
+			p->setFont(authorFont);
 			p->setPen(QColor(130, 137, 150));
-			QRect numRect(r.left() + 6, r.top(), 22, r.height());
-			p->drawText(numRect, Qt::AlignLeft | Qt::AlignVCenter, numStr);
-
-			// Song title
-			QFont titleFont = option.font;
-			titleFont.setBold(isSelected);
-			p->setFont(titleFont);
-			p->setPen(isSelected ? Qt::white : QColor(220, 224, 230));
-			QRect titleRect(r.left() + 32, r.top(), r.width() - 38, r.height());
-			p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
-
-			p->restore();
+			QString elidedAuthor = fmAuthor.elidedText(author, Qt::ElideRight, authorW);
+			QRect authorRect(r.right() - margin - authorW, r.top(), authorW, r.height());
+			p->drawText(authorRect, Qt::AlignRight | Qt::AlignVCenter, elidedAuthor);
 		}
 
-		QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
-		{
-			return QSize(option.rect.width(), 32);
+		p->restore();
+	}
+
+	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
+	{
+		return QSize(option.rect.width(), 32);
+	}
+};
+
+// Delegate for Setlist with numbered rows
+class SetlistDelegate : public QStyledItemDelegate {
+public:
+	explicit SetlistDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
+
+	void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+	{
+		p->save();
+		p->setRenderHint(QPainter::Antialiasing, true);
+
+		QRect r = option.rect.adjusted(2, 2, -2, -2);
+		bool isSelected = option.state & QStyle::State_Selected;
+
+		if (isSelected) {
+			QPainterPath path;
+			path.addRoundedRect(r, 4, 4);
+			p->fillPath(path, QColor(255, 255, 255, 16));
+			p->fillRect(QRect(r.left(), r.top() + 4, 2, r.height() - 8), Qt::white);
 		}
-	};
+
+		QString numStr = QString::number(index.row() + 1);
+		QString title = index.data(Qt::DisplayRole).toString();
+
+		// Row number in muted gray
+		QFont numFont = option.font;
+		numFont.setPointSize(numFont.pointSize() - 1);
+		p->setFont(numFont);
+		p->setPen(QColor(130, 137, 150));
+		QRect numRect(r.left() + 6, r.top(), 22, r.height());
+		p->drawText(numRect, Qt::AlignLeft | Qt::AlignVCenter, numStr);
+
+		// Song title
+		QFont titleFont = option.font;
+		titleFont.setBold(isSelected);
+		p->setFont(titleFont);
+		p->setPen(isSelected ? Qt::white : QColor(220, 224, 230));
+		QRect titleRect(r.left() + 32, r.top(), r.width() - 38, r.height());
+		p->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
+
+		p->restore();
+	}
+
+	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
+	{
+		return QSize(option.rect.width(), 32);
+	}
+};
 
 } // namespace
 
-LyricsDock::LyricsDock(QWidget *parent)
-	: QWidget(parent)
+LyricsDock::LyricsDock(QWidget *parent) : QWidget(parent)
 {
 	setMinimumWidth(300);
 	setupLayout();
