@@ -14,6 +14,7 @@ the Free Software Foundation; either version 2 of the License, or
 
 #include <QComboBox>
 #include <QFile>
+#include <QFileDialog>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QJsonDocument>
@@ -282,6 +283,19 @@ void WorshipWordDock::openAudioStatusMenu()
 		auto *actBackend = menu->addAction(QStringLiteral("Backend: %1").arg(backend));
 		actBackend->setEnabled(false);
 	}
+
+	menu->addSeparator();
+	auto *actReload = menu->addAction(QStringLiteral("Reload Default Model (base.en-q5_1)"));
+	connect(actReload, &QAction::triggered, []() { AudioEngine::instance().loadModel(); });
+	auto *actBrowse = menu->addAction(QStringLiteral("Browse Custom Model…"));
+	connect(actBrowse, &QAction::triggered, [this]() {
+		QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Select Whisper GGML Model File"),
+							    QString(),
+							    QStringLiteral("GGML Model (*.bin);;All Files (*.*)"));
+		if (!path.isEmpty()) {
+			AudioEngine::instance().loadModelFile(path);
+		}
+	});
 
 	menu->exec(m_statusPill->mapToGlobal(QPoint(0, m_statusPill->height())));
 }

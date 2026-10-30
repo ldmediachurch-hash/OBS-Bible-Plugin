@@ -578,15 +578,10 @@ void LyricsDock::openGearMenu()
 
 	// Model Selection
 	auto *modelSub = menu->addMenu(QStringLiteral("Speech model"));
-	auto *actBase = modelSub->addAction(QStringLiteral("base.en-q5_1 (Recommended)"));
-	auto *actTiny = modelSub->addAction(QStringLiteral("tiny.en (Fast / Low CPU)"));
+	auto *actBase = modelSub->addAction(QStringLiteral("base.en-q5_1 (Built-in)"));
 	auto *actCustom = modelSub->addAction(QStringLiteral("Browse model file…"));
 
-	connect(actBase, &QAction::triggered, this, []() {
-		AudioEngine::instance().core().loadModel(QStringLiteral("data/models/ggml-base.en-q5_1.bin"));
-	});
-	connect(actTiny, &QAction::triggered, this,
-		[]() { AudioEngine::instance().core().loadModel(QStringLiteral("data/models/ggml-tiny.en.bin")); });
+	connect(actBase, &QAction::triggered, this, []() { AudioEngine::instance().loadModel(); });
 	connect(actCustom, &QAction::triggered, this, &LyricsDock::selectCustomModel);
 
 	// Hardware backend info
