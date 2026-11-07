@@ -122,7 +122,8 @@ static bool hasRepetitionLoop(const std::vector<TimedWord> &words)
 	if (n < 6)
 		return false;
 
-	for (int len = 2; len <= 4; ++len) {
+	// Check for consecutive repetitions of 2 to 8 word phrases (3+ times)
+	for (int len = 2; len <= 8; ++len) {
 		for (int i = 0; i + 3 * len <= n; ++i) {
 			bool match = true;
 			for (int k = 1; k < 3; ++k) {
@@ -463,25 +464,56 @@ int main(int argc, char **argv)
 	double maxPassTimeMs = 0.0;
 	double maxBacklogSec = 0.0;
 	int lastReported10s = 0;
+	int guardActivations = 0;
+	double totalBufferDur = 0.0;
+	int bufferSampleCount = 0;
+	double maxBufferDur = 0.0;
+	double backlogOver3sStart = -1.0;
+	bool fallingBehindAlert = false;
+	size_t totalAudioProcessedSamples = 0;
 
-	for (size_t pos = 0; pos < audio.size(); pos += kChunkSize) {
-		size_t n = std::min(kChunkSize, audio.size() - pos);
-		std::vector<float> chunk(audio.begin() + pos, audio.begin() + pos + n);
-		streamNow += static_cast<double>(n) / 16000.0;
-
-		// In Real-Time mode, wait until wall-clock reaches stream arrival time
+	size_t pos = 0;
+	while (pos < audio.size()) {
+		size_t targetPos;
 		if (isRealtime) {
 			auto now = std::chrono::steady_clock::now();
 			double wallElapsed = std::chrono::duration<double>(now - wallStartTime).count();
-			if (wallElapsed < streamNow) {
-				std::this_thread::sleep_for(std::chrono::duration<double>(streamNow - wallElapsed));
+			targetPos = std::min(audio.size(), static_cast<size_t>(wallElapsed * 16000.0));
+			if (targetPos <= pos) {
+				double nextChunkTime = (static_cast<double>(pos + kChunkSize)) / 16000.0;
+				if (nextChunkTime > wallElapsed) {
+					std::this_thread::sleep_for(std::chrono::duration<double>(nextChunkTime - wallElapsed));
+				}
+				auto nowAfter = std::chrono::steady_clock::now();
+				double wallAfter = std::chrono::duration<double>(nowAfter - wallStartTime).count();
+				targetPos = std::min(audio.size(), static_cast<size_t>(wallAfter * 16000.0));
 			}
+		} else {
+			targetPos = std::min(audio.size(), pos + kChunkSize);
+		}
+
+		if (targetPos <= pos) {
+			targetPos = std::min(audio.size(), pos + kChunkSize);
+		}
+
+		size_t arrivingSamples = targetPos - pos;
+		double arrivingSec = static_cast<double>(arrivingSamples) / 16000.0;
+		streamNow = static_cast<double>(targetPos) / 16000.0;
+
+		if (isRealtime && arrivingSamples > static_cast<size_t>(1.25 * 16000)) {
+			guardActivations++;
+			double wallNow = std::chrono::duration<double>(std::chrono::steady_clock::now() - wallStartTime).count();
+			double curBacklog = std::max(0.0, wallNow - (static_cast<double>(pos) / 16000.0));
+			printf("  [BACKLOG GUARD] Activated: backlog=%.2fs (arrived %.2fs of audio), skipping interim passes to process newest full buffer\n",
+			       curBacklog, arrivingSec);
 		}
 
 		if (streamBuffer.empty()) {
-			bufStartSec = std::max(0.0, streamNow - (static_cast<double>(chunk.size()) / 16000.0));
+			bufStartSec = static_cast<double>(pos) / 16000.0;
 		}
-		streamBuffer.insert(streamBuffer.end(), chunk.begin(), chunk.end());
+		streamBuffer.insert(streamBuffer.end(), audio.begin() + pos, audio.begin() + targetPos);
+		totalAudioProcessedSamples += arrivingSamples;
+		pos = targetPos;
 
 		if (streamBuffer.size() < static_cast<size_t>(2.5 * 16000))
 			continue;
@@ -516,17 +548,12 @@ int main(int argc, char **argv)
 			continue;
 		}
 
-		// Buffer cap 15s
-		constexpr size_t kMaxBufferSamples = 15 * 16000;
-		if (streamBuffer.size() > kMaxBufferSamples) {
-			size_t drop = streamBuffer.size() - kMaxBufferSamples;
-			streamBuffer.erase(streamBuffer.begin(), streamBuffer.begin() + drop);
-			bufStartSec += static_cast<double>(drop) / 16000.0;
-		}
-
 		double bufStart = bufStartSec;
 		std::vector<float> audioCopy = streamBuffer;
 		double bufferSeconds = static_cast<double>(audioCopy.size()) / 16000.0;
+		totalBufferDur += bufferSeconds;
+		bufferSampleCount++;
+		maxBufferDur = std::max(maxBufferDur, bufferSeconds);
 
 		// 80Hz high-pass and AGC
 		applyHighPass80Hz(audioCopy, 16000.0f);
@@ -696,21 +723,121 @@ int main(int argc, char **argv)
 			prevPassWords.clear();
 		}
 
-		// 3. Trim buffer at committed sentence end
+		// 3. SAFER TRIM POINTS: when buffer > 6s, trim at the latest COMMITTED word that is
+		// followed by a pause of at least 0.3s (gap to next word's start), or at . ? ! if that comes first.
+		// Never trim inside a run of words with no pause.
 		double bufDur = static_cast<double>(streamBuffer.size()) / 16000.0;
-		if (bufDur > 6.0 && lastCommittedSentenceEndSec > bufStartSec) {
-			double trimSec = lastCommittedSentenceEndSec - bufStartSec;
-			size_t drop = std::min(streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
-			if (drop > 0) {
-				streamBuffer.erase(streamBuffer.begin(), streamBuffer.begin() + drop);
-				bufStartSec += static_cast<double>(drop) / 16000.0;
+		if (bufDur > 6.0) {
+			int bestTrimWordIdx = -1;
+			for (int i = static_cast<int>(words.size()) - 1; i >= 0; --i) {
+				if (words[i].endTimeSec > lastCommittedTimeSec)
+					continue;
+				if (words[i].endTimeSec <= bufStartSec)
+					continue;
+
+				bool isPunct = isSentenceEnd(words[i].text);
+				bool hasPause = false;
+				if (i + 1 < static_cast<int>(words.size())) {
+					double gap = words[i + 1].startTimeSec - words[i].endTimeSec;
+					if (gap >= 0.3)
+						hasPause = true;
+				} else {
+					double gap = (bufStartSec + bufDur) - words[i].endTimeSec;
+					if (gap >= 0.3)
+						hasPause = true;
+				}
+
+				if (isPunct || hasPause) {
+					bestTrimWordIdx = i;
+					break;
+				}
 			}
-		} else if (bufDur > 10.0 && lastCommittedTimeSec > bufStartSec + 4.0) {
-			double trimSec = lastCommittedTimeSec - bufStartSec;
-			size_t drop = std::min(streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
-			if (drop > 0) {
-				streamBuffer.erase(streamBuffer.begin(), streamBuffer.begin() + drop);
-				bufStartSec += static_cast<double>(drop) / 16000.0;
+
+			if (bestTrimWordIdx >= 0) {
+				double trimSec = words[bestTrimWordIdx].endTimeSec - bufStartSec;
+				size_t drop = std::min(streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
+				if (drop > 0) {
+					streamBuffer.erase(streamBuffer.begin(), streamBuffer.begin() + drop);
+					bufStartSec += static_cast<double>(drop) / 16000.0;
+				}
+			}
+		}
+
+		// 4. LOWER HARD CAP: 10s instead of 15s. When the cap forces a trim, first FORCE-COMMIT
+		// the current hypothesis words up to the trim point (push them as final) so no words are lost.
+		bufDur = static_cast<double>(streamBuffer.size()) / 16000.0;
+		if (bufDur > 10.0) {
+			int forceIdx = -1;
+
+			// Look for latest word followed by pause >= 0.3s or ending in . ? !
+			for (int i = static_cast<int>(uncommitted.size()) - 1; i >= 0; --i) {
+				bool isPunct = isSentenceEnd(uncommitted[i].text);
+				bool hasPause = false;
+				if (i + 1 < static_cast<int>(uncommitted.size())) {
+					double gap = uncommitted[i + 1].startTimeSec - uncommitted[i].endTimeSec;
+					if (gap >= 0.3)
+						hasPause = true;
+				} else {
+					double gap = (bufStartSec + bufDur) - uncommitted[i].endTimeSec;
+					if (gap >= 0.3)
+						hasPause = true;
+				}
+				if (isPunct || hasPause) {
+					forceIdx = i;
+					break;
+				}
+			}
+
+			// If no 0.3s pause or punct, look for largest gap
+			if (forceIdx < 0 && uncommitted.size() > 1) {
+				double maxGap = 0.0;
+				int bestGapIdx = -1;
+				for (size_t i = 0; i + 1 < uncommitted.size(); ++i) {
+					double gap = uncommitted[i + 1].startTimeSec - uncommitted[i].endTimeSec;
+					if (gap > maxGap) {
+						maxGap = gap;
+						bestGapIdx = static_cast<int>(i);
+					}
+				}
+				if (maxGap >= 0.15 && bestGapIdx >= 0) {
+					forceIdx = bestGapIdx;
+				}
+			}
+
+			// If still nothing, force-commit all uncommitted words so no phrase is cut in half
+			if (forceIdx < 0 && !uncommitted.empty()) {
+				forceIdx = static_cast<int>(uncommitted.size()) - 1;
+			}
+
+			if (forceIdx >= 0) {
+				std::string forceText;
+				for (int i = 0; i <= forceIdx; ++i) {
+					if (i > 0)
+						forceText += " ";
+					forceText += uncommitted[i].text;
+				}
+				auto refs = live.push(forceText, true, nowMs);
+				for (const auto &r : refs) {
+					int conf = static_cast<int>(std::round(r.confidence * 100.0));
+					printf("[%5.1fs]   >>> DETECTED (force-commit): %s (status=%s, kind=%s, conf=%d%%)\n",
+					       streamNow, r.label.c_str(), r.status.c_str(), r.kind.c_str(), conf);
+					allDetections.push_back({r.label, conf, r.status, r.kind, streamNow, nowWallSec});
+				}
+				committedHistory += " " + forceText;
+				if (committedHistory.size() > 1000)
+					committedHistory = committedHistory.substr(committedHistory.size() - 800);
+
+				lastCommittedTimeSec = uncommitted[forceIdx].endTimeSec;
+				double trimToSec = uncommitted[forceIdx].endTimeSec;
+				if (trimToSec > bufStartSec) {
+					double trimSec = trimToSec - bufStartSec;
+					size_t drop = std::min(streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
+					if (drop > 0) {
+						streamBuffer.erase(streamBuffer.begin(), streamBuffer.begin() + drop);
+						bufStartSec += static_cast<double>(drop) / 16000.0;
+					}
+				}
+				prevPassWords.clear();
 			}
 		}
 
@@ -723,13 +850,25 @@ int main(int argc, char **argv)
 		printf("[pass %2d: buf=%4.1fs, total=%5.1fms (vad=%4.1fms, whisper=%5.1fms, other=%4.1fms)]\n",
 		       passCount, bufferSeconds, passMs, vadMs, whisperMs, otherMs);
 
-		// Backlog tracking
+		// Backlog tracking and alert check
 		if (isRealtime) {
 			auto nowWall = std::chrono::steady_clock::now();
 			double wallElapsed = std::chrono::duration<double>(nowWall - wallStartTime).count();
 			double curBacklog = std::max(0.0, wallElapsed - streamNow);
 			if (curBacklog > maxBacklogSec)
 				maxBacklogSec = curBacklog;
+
+			if (curBacklog > 3.0) {
+				if (backlogOver3sStart < 0.0) {
+					backlogOver3sStart = wallElapsed;
+				} else if (wallElapsed - backlogOver3sStart > 5.0 && !fallingBehindAlert) {
+					fallingBehindAlert = true;
+					printf("  ⚠️ [ALERT] Processing falling behind (backlog > 3.0s for > 5.0s, cur=%.2fs)\n", curBacklog);
+				}
+			} else {
+				backlogOver3sStart = -1.0;
+				fallingBehindAlert = false;
+			}
 
 			int check10 = static_cast<int>(streamNow / 10.0);
 			if (check10 > lastReported10s && check10 <= 5) {
@@ -744,9 +883,11 @@ int main(int argc, char **argv)
 
 	double realTimeFactor = (totalPassTimeMs / 1000.0) / duration;
 	double avgPassMs = passCount > 0 ? (totalPassTimeMs / passCount) : 0.0;
+	double avgBufferDur = bufferSampleCount > 0 ? (totalBufferDur / bufferSampleCount) : 0.0;
+	size_t droppedAudioSamples = audio.size() > totalAudioProcessedSamples ? (audio.size() - totalAudioProcessedSamples) : 0;
 
 	std::cout << "\n---------------------------------------------------------\n";
-	std::cout << "Timing Summary:\n";
+	std::cout << "Timing & Pipeline Summary:\n";
 	std::cout << "  Audio duration:       " << duration << " s\n";
 	std::cout << "  Total processing:     " << (totalPassTimeMs / 1000.0) << " s\n";
 	std::cout << "  Real-time factor:     " << realTimeFactor << "x ("
@@ -754,9 +895,14 @@ int main(int argc, char **argv)
 	std::cout << "  Pass count:           " << passCount << "\n";
 	std::cout << "  Average ms per pass:  " << avgPassMs << " ms\n";
 	std::cout << "  Maximum ms per pass:  " << maxPassTimeMs << " ms\n";
+	std::cout << "  Average buffer:       " << avgBufferDur << " s\n";
+	std::cout << "  Maximum buffer:       " << maxBufferDur << " s\n";
 	if (isRealtime) {
 		std::cout << "  Maximum backlog:      " << maxBacklogSec << " s\n";
+		std::cout << "  Guard activations:    " << guardActivations << "\n";
 	}
+	std::cout << "  Audio dropped:        " << (static_cast<double>(droppedAudioSamples) / 16000.0)
+		  << " s (" << (droppedAudioSamples == 0 ? "CONFIRMED: NO AUDIO DROPPED" : "WARNING: AUDIO WAS DROPPED") << ")\n";
 	std::cout << "---------------------------------------------------------\n";
 
 	// Verification against expected results:

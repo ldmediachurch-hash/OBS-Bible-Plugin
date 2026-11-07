@@ -542,18 +542,33 @@ void AudioEngine::runAudioFileTest(const QString &filePath, bool realTime)
 	double streamTime = 0.0;
 	auto wallStart = std::chrono::steady_clock::now();
 
-	for (size_t offset = 0; offset < samples.size(); offset += kChunkSize) {
-		size_t n = std::min(kChunkSize, samples.size() - offset);
-		std::vector<float> chunk(samples.begin() + offset, samples.begin() + offset + n);
-		streamTime += static_cast<double>(n) / 16000.0;
-
+	size_t offset = 0;
+	while (offset < samples.size()) {
+		size_t targetOffset;
 		if (realTime) {
 			auto now = std::chrono::steady_clock::now();
 			double wallElapsed = std::chrono::duration<double>(now - wallStart).count();
-			if (wallElapsed < streamTime) {
-				std::this_thread::sleep_for(std::chrono::duration<double>(streamTime - wallElapsed));
+			targetOffset = std::min(samples.size(), static_cast<size_t>(wallElapsed * 16000.0));
+			if (targetOffset <= offset) {
+				double nextChunkTime = static_cast<double>(offset + kChunkSize) / 16000.0;
+				if (nextChunkTime > wallElapsed) {
+					std::this_thread::sleep_for(std::chrono::duration<double>(nextChunkTime - wallElapsed));
+				}
+				auto nowAfter = std::chrono::steady_clock::now();
+				double wallAfter = std::chrono::duration<double>(nowAfter - wallStart).count();
+				targetOffset = std::min(samples.size(), static_cast<size_t>(wallAfter * 16000.0));
 			}
+		} else {
+			targetOffset = std::min(samples.size(), offset + kChunkSize);
 		}
+
+		if (targetOffset <= offset) {
+			targetOffset = std::min(samples.size(), offset + kChunkSize);
+		}
+
+		std::vector<float> chunk(samples.begin() + offset, samples.begin() + targetOffset);
+		streamTime = static_cast<double>(targetOffset) / 16000.0;
+		offset = targetOffset;
 
 		m_core.processWindowDirect(chunk, streamTime);
 	}

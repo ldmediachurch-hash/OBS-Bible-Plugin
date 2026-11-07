@@ -71,6 +71,7 @@ public:
 
 	void setAutoAdvance(bool enabled);
 	bool autoAdvance() const;
+	int guardActivationCount() const { return m_guardActivationCount; }
 
 	void setActiveSong(const QString &title, int currentSlideIndex, const QString &nextSongTitle = QString());
 	void clearActiveSong();
@@ -142,6 +143,9 @@ private:
 
 	std::atomic<bool> m_workerRunning{false};
 	std::atomic<bool> m_fallingBehind{false};
+	std::chrono::steady_clock::time_point m_backlogOver3sStart;
+	bool m_backlogTimerActive{false};
+	int m_guardActivationCount{0};
 	std::unique_ptr<std::thread> m_workerThread;
 
 	// LocalAgreement-2 Streaming state

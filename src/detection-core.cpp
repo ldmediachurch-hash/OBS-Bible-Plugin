@@ -138,8 +138,8 @@ static bool hasRepetitionLoop(const std::vector<TimedWord> &words)
 	if (n < 6)
 		return false;
 
-	// Check for consecutive repetitions of 2, 3, or 4 word phrases (3+ times)
-	for (int len = 2; len <= 4; ++len) {
+	// Check for consecutive repetitions of 2 to 8 word phrases (3+ times)
+	for (int len = 2; len <= 8; ++len) {
 		for (int i = 0; i + 3 * len <= n; ++i) {
 			bool match = true;
 			for (int k = 1; k < 3; ++k) {
@@ -608,27 +608,34 @@ void DetectionCore::workerLoop()
 		if (curSize - m_lastProcessedSamples < static_cast<size_t>(1.0 * 16000))
 			continue;
 
-		// Backlog guard: check if audio processing is falling > 3s behind real-time
+		// Backlog guard: never throw away unprocessed audio.
+		// When behind, skip interim passes (processing runs on the newest full buffer).
+		// Only show "Falling behind" if backlog stays above 3s for more than 5s. Log whenever guard activates.
 		double streamNow = m_streamTimeSec.load(std::memory_order_relaxed);
 		double processedUpTo = m_bufStartSec + (static_cast<double>(curSize) / 16000.0);
 		double backlog = std::max(0.0, streamNow - processedUpTo);
 
+		auto nowClock = std::chrono::steady_clock::now();
 		if (backlog > 3.0) {
-			if (!m_fallingBehind.load(std::memory_order_relaxed)) {
-				m_fallingBehind.store(true, std::memory_order_relaxed);
-				emit backlogWarningChanged(true, backlog);
+			if (!m_backlogTimerActive) {
+				m_backlogTimerActive = true;
+				m_backlogOver3sStart = nowClock;
+				m_guardActivationCount++;
+				fprintf(stderr, "[LD Worship & Word] [BACKLOG GUARD] Activated: backlog=%.2fs, skipping interim passes to process newest full buffer (%.1fs)\n",
+				        backlog, static_cast<double>(curSize) / 16000.0);
+			} else {
+				double durationOver3s = std::chrono::duration<double>(nowClock - m_backlogOver3sStart).count();
+				if (durationOver3s >= 5.0 && !m_fallingBehind.load(std::memory_order_relaxed)) {
+					m_fallingBehind.store(true, std::memory_order_relaxed);
+					emit backlogWarningChanged(true, backlog);
+				}
 			}
-			// Skip passes: keep only latest 2.5s to immediately catch up
-			constexpr size_t kKeepSamples = static_cast<size_t>(2.5 * 16000);
-			if (m_streamBuffer.size() > kKeepSamples) {
-				size_t drop = m_streamBuffer.size() - kKeepSamples;
-				m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
-				m_bufStartSec += static_cast<double>(drop) / 16000.0;
-				m_lastProcessedSamples = m_streamBuffer.size();
+		} else if (backlog <= 2.0) {
+			m_backlogTimerActive = false;
+			if (m_fallingBehind.load(std::memory_order_relaxed)) {
+				m_fallingBehind.store(false, std::memory_order_relaxed);
+				emit backlogWarningChanged(false, backlog);
 			}
-		} else if (backlog < 1.5 && m_fallingBehind.load(std::memory_order_relaxed)) {
-			m_fallingBehind.store(false, std::memory_order_relaxed);
-			emit backlogWarningChanged(false, backlog);
 		}
 
 		runStreamingPass();
@@ -812,21 +819,142 @@ void DetectionCore::runStreamingPass()
 		m_prevPassWords.clear();
 	}
 
-	// 3. Move buf_start forward to the end of a committed clause/sentence, and only when buffer > 6s
+	// 3. SAFER TRIM POINTS: when buffer > 6s, trim at the latest COMMITTED word that is
+	// followed by a pause of at least 0.3s (gap to next word's start), or at . ? ! if that comes first.
+	// Never trim inside a run of words with no pause.
 	double bufDurationSec = static_cast<double>(m_streamBuffer.size()) / 16000.0;
-	if (bufDurationSec > 6.0 && m_lastCommittedSentenceEndSec > m_bufStartSec) {
-		double trimSec = m_lastCommittedSentenceEndSec - m_bufStartSec;
-		size_t drop = std::min(m_streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
-		if (drop > 0) {
-			m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
-			m_bufStartSec += static_cast<double>(drop) / 16000.0;
+	if (bufDurationSec > 6.0) {
+		int bestTrimWordIdx = -1;
+		for (int i = static_cast<int>(words.size()) - 1; i >= 0; --i) {
+			if (words[i].endTimeSec > m_lastCommittedTimeSec)
+				continue;
+			if (words[i].endTimeSec <= m_bufStartSec)
+				continue;
+
+			bool isPunctuation = isSentenceEndWord(words[i].text);
+			bool hasPause = false;
+			if (i + 1 < static_cast<int>(words.size())) {
+				double gap = words[i + 1].startTimeSec - words[i].endTimeSec;
+				if (gap >= 0.3)
+					hasPause = true;
+			} else {
+				double gap = (m_bufStartSec + bufDurationSec) - words[i].endTimeSec;
+				if (gap >= 0.3)
+					hasPause = true;
+			}
+
+			if (isPunctuation || hasPause) {
+				bestTrimWordIdx = i;
+				break;
+			}
 		}
-	} else if (bufDurationSec > 10.0 && m_lastCommittedTimeSec > m_bufStartSec + 4.0) {
-		double trimSec = m_lastCommittedTimeSec - m_bufStartSec;
-		size_t drop = std::min(m_streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
-		if (drop > 0) {
-			m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
-			m_bufStartSec += static_cast<double>(drop) / 16000.0;
+
+		if (bestTrimWordIdx >= 0) {
+			double trimSec = words[bestTrimWordIdx].endTimeSec - m_bufStartSec;
+			size_t drop = std::min(m_streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
+			if (drop > 0) {
+				m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
+				m_bufStartSec += static_cast<double>(drop) / 16000.0;
+			}
+		}
+	}
+
+	// 4. LOWER HARD CAP: 10s instead of 15s. When the cap forces a trim, first FORCE-COMMIT
+	// the current hypothesis words up to the trim point (push them as final) so no words are lost.
+	bufDurationSec = static_cast<double>(m_streamBuffer.size()) / 16000.0;
+	if (bufDurationSec > 10.0) {
+		int forceIdx = -1;
+
+		// Look for latest word followed by pause >= 0.3s or ending in . ? !
+		for (int i = static_cast<int>(uncommitted.size()) - 1; i >= 0; --i) {
+			bool isPunct = isSentenceEndWord(uncommitted[i].text);
+			bool hasPause = false;
+			if (i + 1 < static_cast<int>(uncommitted.size())) {
+				double gap = uncommitted[i + 1].startTimeSec - uncommitted[i].endTimeSec;
+				if (gap >= 0.3)
+					hasPause = true;
+			} else {
+				double gap = (m_bufStartSec + bufDurationSec) - uncommitted[i].endTimeSec;
+				if (gap >= 0.3)
+					hasPause = true;
+			}
+			if (isPunct || hasPause) {
+				forceIdx = i;
+				break;
+			}
+		}
+
+		// If no 0.3s pause or punct, look for largest gap
+		if (forceIdx < 0 && uncommitted.size() > 1) {
+			double maxGap = 0.0;
+			int bestGapIdx = -1;
+			for (size_t i = 0; i + 1 < uncommitted.size(); ++i) {
+				double gap = uncommitted[i + 1].startTimeSec - uncommitted[i].endTimeSec;
+				if (gap > maxGap) {
+					maxGap = gap;
+					bestGapIdx = static_cast<int>(i);
+				}
+			}
+			if (maxGap >= 0.15 && bestGapIdx >= 0) {
+				forceIdx = bestGapIdx;
+			}
+		}
+
+		// If still nothing, force-commit all uncommitted words so no phrase is cut in half
+		if (forceIdx < 0 && !uncommitted.empty()) {
+			forceIdx = static_cast<int>(uncommitted.size()) - 1;
+		}
+
+		if (forceIdx >= 0) {
+			std::string forceText;
+			for (int i = 0; i <= forceIdx; ++i) {
+				if (i > 0)
+					forceText += " ";
+				forceText += uncommitted[i].text;
+			}
+
+			if (m_liveScripture) {
+				auto refs = m_liveScripture->push(forceText, true, nowMs);
+				for (const auto &r : refs) {
+					int rConf = static_cast<int>(std::round(r.confidence * 100.0));
+					emit scriptureRefDetected(QString::fromStdString(r.label), rConf,
+								  QString::fromStdString(r.status),
+								  QString::fromStdString(r.kind), uncommitted[forceIdx].endTimeSec);
+					auto *dock = WorshipWordDock::instance();
+					if (dock) {
+						QMetaObject::invokeMethod(dock, [dock, r]() {
+							dock->showSuggestion(r);
+						}, Qt::QueuedConnection);
+					}
+					SpeechSuggestion sugg;
+					sugg.channel = Channel::Scripture;
+					sugg.reference = QString::fromStdString(r.label);
+					sugg.text = QString::fromStdString(r.text);
+					sugg.confidence = rConf;
+					sugg.tentative = (r.status == "preview");
+					sugg.timestampSeconds = uncommitted[forceIdx].endTimeSec;
+					emit suggestionDetected(sugg);
+				}
+			}
+
+			m_committedHistory += " " + forceText;
+			if (m_committedHistory.size() > 1000) {
+				m_committedHistory = m_committedHistory.substr(m_committedHistory.size() - 800);
+			}
+			m_lastCommittedTimeSec = uncommitted[forceIdx].endTimeSec;
+			emit transcriptCommitted(QString::fromStdString(forceText), m_lastCommittedTimeSec);
+			emit rawTranscriptPass(QString::fromStdString(forceText), m_lastCommittedTimeSec);
+
+			double trimToSec = uncommitted[forceIdx].endTimeSec;
+			if (trimToSec > m_bufStartSec) {
+				double trimSec = trimToSec - m_bufStartSec;
+				size_t drop = std::min(m_streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
+				if (drop > 0) {
+					m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
+					m_bufStartSec += static_cast<double>(drop) / 16000.0;
+				}
+			}
+			m_prevPassWords.clear();
 		}
 	}
 
