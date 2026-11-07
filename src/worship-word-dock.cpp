@@ -117,7 +117,7 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 	audioLayout->addWidget(m_micIcon);
 
 	m_audioCombo = new QComboBox(m_audioRow);
-	m_audioCombo->setToolTip(QStringLiteral("Select audio input device"));
+	m_audioCombo->setToolTip(QStringLiteral("Select audio input device.\nNote: Use a dry pastor-mic feed (aux send, pre-fader), not the program mix with music."));
 	m_audioCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 	connect(m_audioCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
 		&WorshipWordDock::audioSourceChanged);
@@ -392,6 +392,10 @@ void WorshipWordDock::openAudioStatusMenu()
 			saveConfig();
 		}
 	});
+
+	menu->addSeparator();
+	auto *actFeedNote = menu->addAction(QStringLiteral("Tip: Use a dry pastor-mic feed (aux send, pre-fader), not the program mix with music."));
+	actFeedNote->setEnabled(false);
 
 	menu->exec(m_statusPill->mapToGlobal(QPoint(0, m_statusPill->height())));
 }

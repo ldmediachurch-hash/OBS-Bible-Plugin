@@ -154,6 +154,80 @@ static bool hasRepetitionLoop(const std::vector<TimedWord> &words)
 	return false;
 }
 
+static void applyHighPass80Hz(std::vector<float> &audio, float sampleRate = 16000.0f)
+{
+	if (audio.empty())
+		return;
+
+	constexpr float f0 = 80.0f;
+	constexpr float q = 0.70710678f;
+	const float omega0 = 2.0f * static_cast<float>(M_PI) * (f0 / sampleRate);
+	const float sinOmega = std::sin(omega0);
+	const float cosOmega = std::cos(omega0);
+	const float alpha = sinOmega / (2.0f * q);
+
+	const float b0 = (1.0f + cosOmega) * 0.5f;
+	const float b1 = -(1.0f + cosOmega);
+	const float b2 = (1.0f + cosOmega) * 0.5f;
+	const float a0 = 1.0f + alpha;
+	const float a1 = -2.0f * cosOmega;
+	const float a2 = 1.0f - alpha;
+
+	const float b0_n = b0 / a0;
+	const float b1_n = b1 / a0;
+	const float b2_n = b2 / a0;
+	const float a1_n = a1 / a0;
+	const float a2_n = a2 / a0;
+
+	float x1 = 0.0f, x2 = 0.0f;
+	float y1 = 0.0f, y2 = 0.0f;
+
+	for (float &x : audio) {
+		float y = b0_n * x + b1_n * x1 + b2_n * x2 - a1_n * y1 - a2_n * y2;
+		x2 = x1;
+		x1 = x;
+		y2 = y1;
+		y1 = y;
+		x = y;
+	}
+}
+
+static void applyAgcTo20dBFS(std::vector<float> &audio)
+{
+	if (audio.empty())
+		return;
+
+	constexpr float targetRms = 0.10f; // -20 dBFS RMS
+	constexpr size_t subSize = 3200;   // 200 ms @ 16 kHz
+
+	float sumSpeechSq = 0.0f;
+	size_t speechSamples = 0;
+
+	for (size_t i = 0; i + subSize <= audio.size(); i += subSize) {
+		float subSum = 0.0f;
+		for (size_t j = 0; j < subSize; ++j) {
+			float s = audio[i + j];
+			subSum += s * s;
+		}
+		float subRms = std::sqrt(subSum / static_cast<float>(subSize));
+		if (subRms > 0.005f) {
+			sumSpeechSq += subSum;
+			speechSamples += subSize;
+		}
+	}
+
+	if (speechSamples > 0) {
+		float speechRms = std::sqrt(sumSpeechSq / static_cast<float>(speechSamples));
+		if (speechRms > 0.001f) {
+			float gain = targetRms / speechRms;
+			gain = std::clamp(gain, 0.2f, 10.0f);
+			for (float &s : audio) {
+				s = std::clamp(s * gain, -1.0f, 1.0f);
+			}
+		}
+	}
+}
+
 static std::string bookToOsis(int bookNumber, const QString &bookName)
 {
 	if (bookNumber >= 1 && bookNumber <= 66) {
@@ -533,6 +607,10 @@ void DetectionCore::runStreamingPass()
 	double bufStart = m_bufStartSec;
 	std::vector<float> audioCopy = m_streamBuffer;
 
+	// Step 12: 80 Hz high-pass and automatic gain to about -20 dBFS for speech
+	applyHighPass80Hz(audioCopy, 16000.0f);
+	applyAgcTo20dBFS(audioCopy);
+
 	// Transcribe words with token timestamps
 	std::vector<TimedWord> words = transcribeWords(audioCopy, bufStart);
 
@@ -776,7 +854,10 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 
 QString DetectionCore::transcribeChunk(const std::vector<float> &chunk)
 {
-	auto words = transcribeWords(chunk, 0.0);
+	std::vector<float> audioCopy = chunk;
+	applyHighPass80Hz(audioCopy, 16000.0f);
+	applyAgcTo20dBFS(audioCopy);
+	auto words = transcribeWords(audioCopy, 0.0);
 	QString res;
 	for (size_t i = 0; i < words.size(); ++i) {
 		if (i > 0)
