@@ -39,7 +39,7 @@ static bool isSentenceEnd(const std::string &w)
 		return false;
 	for (auto it = w.rbegin(); it != w.rend(); ++it) {
 		char c = *it;
-		if (c == '.' || c == '?' || c == '!' || c == ';' || c == ',')
+		if (c == '.' || c == '?' || c == '!')
 			return true;
 		if (std::isalnum(static_cast<unsigned char>(c)))
 			break;
@@ -537,7 +537,8 @@ int main(int argc, char **argv)
 		wparams.strategy = WHISPER_SAMPLING_GREEDY;
 		wparams.temperature = 0.0f;
 		wparams.temperature_inc = 0.0f;
-		wparams.max_tokens = 64;
+		int maxTokens = std::max(64, static_cast<int>(std::ceil(bufferSeconds * 12.0)));
+		wparams.max_tokens = maxTokens;
 		wparams.token_timestamps = true;
 		wparams.no_timestamps = false;
 		wparams.single_segment = false;

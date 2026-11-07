@@ -1,5 +1,6 @@
 // Same cases as test.mjs in the JavaScript version. Build:
 //   g++ -std=c++17 -O2 -Isrc src/scripture_detect.cpp tests/scripture_detect_test.cpp -o sd_test && ./sd_test tests/kjv.tsv
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -88,6 +89,11 @@ int main(int argc, char** argv) {
   check("next verse", labels("the next verse says", {"Rom", 8, 28}), {"Romans 8:29"});
   check("chapter follow-up", labels("go back to chapter five verse one", {"Rom", 8, 0}), {"Romans 5:1"});
   check("no context, no follow-up", labels("verse twenty eight"), {});
+  check("book name lost", labels("138, verse 7, though I walk", {"Ps", 139, 23}), {"Psalms 138:7"});
+  check("bad lost chapter is dropped", labels("500, verse 7", {"Ps", 139, 23}), {});
+  { auto v = labels("verse number 28, verse 7", {"Ps", 138, 7}); v.erase(std::remove(v.begin(), v.end(), std::string("Psalms 138:7")), v.end());
+    check("garbage verse number 28 ignored", v, {}); }
+  check("same chapter number before verse", labels("8 verse 31", {"Rom", 8, 28}), {"Romans 8:31"});
 
   {
     int64_t clock = 0; ScriptureDetector det;

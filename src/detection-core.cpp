@@ -50,7 +50,7 @@ static bool isSentenceEndWord(const std::string &w)
 		return false;
 	for (auto it = w.rbegin(); it != w.rend(); ++it) {
 		char c = *it;
-		if (c == '.' || c == '?' || c == '!' || c == ';' || c == ',')
+		if (c == '.' || c == '?' || c == '!')
 			return true;
 		if (std::isalnum(static_cast<unsigned char>(c)))
 			break;
@@ -857,7 +857,9 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 	wparams.strategy = WHISPER_SAMPLING_GREEDY;
 	wparams.temperature = 0.0f;
 	wparams.temperature_inc = 0.0f;
-	wparams.max_tokens = 64;
+	double bufferSeconds = static_cast<double>(audio.size()) / 16000.0;
+	int maxTokens = std::max(64, static_cast<int>(std::ceil(bufferSeconds * 12.0)));
+	wparams.max_tokens = maxTokens;
 	wparams.no_timestamps = false;
 	wparams.token_timestamps = true;
 	wparams.single_segment = false;
@@ -873,7 +875,6 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 	wparams.n_threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 2, 8);
 
 	// Size audio_ctx to the buffer (~buffer_seconds/30*1500, multiple of 64, min 384, max 1500)
-	double bufferSeconds = static_cast<double>(audio.size()) / 16000.0;
 	int targetCtx = static_cast<int>(std::ceil((bufferSeconds / 30.0) * 1500.0));
 	targetCtx = ((targetCtx + 63) / 64) * 64;
 	wparams.audio_ctx = std::clamp(targetCtx, 384, 1500);

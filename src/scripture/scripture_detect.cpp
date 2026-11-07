@@ -465,9 +465,17 @@ std::vector<Ref> parseReferences(const std::vector<Token>& toks, Context context
       int ve = 0, end = i + 2;
       const Token* re = at(toks, end);
       if (re && RANGE.count(re->w) && isN(toks, end + 1) && toks[end + 1].n > v && (re->w != "and" || toks[end + 1].n == v + 1)) { ve = toks[end + 1].n; end += 2; }
-      if (validate(context.book, context.chapter, v, ve)) {
-        out.push_back(makeRef(context.book, context.chapter, v, ve, 0.75, "followup", i, end));
-        for (int j = i; j < end; j++) used.insert(j);
+      // "...138, verse 7" with the book name lost: a number right before "verse" is the chapter, not the current one
+      int ch = context.chapter, start = i;
+      if (isN(toks, i - 1) && !used.count(i - 1) && toks[i - 1].n != context.chapter &&
+          !(isW(toks, i - 2, "verse") || isW(toks, i - 2, "number") || isW(toks, i - 2, "chapter"))) {
+        if (!validate(context.book, toks[i - 1].n, v, ve)) continue;
+        ch = toks[i - 1].n; start = i - 1;
+      }
+      if (validate(context.book, ch, v, ve)) {
+        out.push_back(makeRef(context.book, ch, v, ve, ch == context.chapter ? 0.75 : 0.7, "followup", start, end));
+        for (int j = start; j < end; j++) used.insert(j);
+        context.chapter = ch;
         context.verse = ve ? ve : v;
         i = end - 1;
       }
