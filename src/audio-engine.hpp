@@ -65,7 +65,7 @@ public:
 	DetectionCore &core() { return m_core; }
 
 	// Internal callback from OBS
-	void processAudio(const float *samples, uint32_t frames, bool muted);
+	void processAudio(const struct audio_data *data, obs_source_t *source, bool muted);
 
 signals:
 	void levelChanged(float level);
@@ -91,9 +91,7 @@ private:
 
 	audio_resampler_t *m_resampler = nullptr;
 	uint32_t m_resamplerInRate = 0;
-
-	double m_resamplePos = 0.0;
-	std::vector<float> m_resampleBuffer;
+	speaker_layout m_resamplerLayout = SPEAKERS_UNKNOWN;
 
 	DetectionCore m_core;
 

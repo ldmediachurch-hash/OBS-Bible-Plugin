@@ -28,17 +28,12 @@ the Free Software Foundation; either version 2 of the License, or
 
 namespace {
 
-static void on_source_audio(void *param, obs_source_t *, const struct audio_data *data, bool muted)
+static void on_source_audio(void *param, obs_source_t *source, const struct audio_data *data, bool muted)
 {
 	if (!param)
 		return;
 	auto *engine = static_cast<AudioEngine *>(param);
-	if (!data || data->frames == 0 || muted) {
-		engine->processAudio(nullptr, 0, muted);
-		return;
-	}
-	const float *samples = reinterpret_cast<const float *>(data->data[0]);
-	engine->processAudio(samples, data->frames, muted);
+	engine->processAudio(data, source, muted);
 }
 
 struct SourceEnumCtx {
@@ -342,35 +337,47 @@ Channel AudioEngine::channelMode() const
 	return m_core.channelMode();
 }
 
-void AudioEngine::processAudio(const float *samples, uint32_t frames, bool muted)
+void AudioEngine::processAudio(const struct audio_data *data, obs_source_t *source, bool muted)
 {
-	if (!samples || frames == 0 || muted) {
+	if (!data || data->frames == 0 || muted || !data->data[0]) {
 		m_level.store(0.0f, std::memory_order_relaxed);
 		return;
 	}
 
+	const float *samples = reinterpret_cast<const float *>(data->data[0]);
+
 	// Calculate RMS level for signal meter
 	float sum = 0.0f;
-	for (uint32_t i = 0; i < frames; i++) {
+	for (uint32_t i = 0; i < data->frames; i++) {
 		float s = samples[i];
 		sum += s * s;
 	}
-	float rms = sqrtf(sum / static_cast<float>(frames));
+	float rms = sqrtf(sum / static_cast<float>(data->frames));
 
 	// Normalized dB range: -50 dB (noise floor) to 0 dB
 	float dB = (rms > 0.00001f) ? 20.0f * log10f(rms) : -60.0f;
 	float norm = std::clamp((dB + 50.0f) / 50.0f, 0.0f, 1.0f);
 	m_level.store(norm, std::memory_order_relaxed);
 
-	// Query OBS sample rate (e.g. 44100, 48000, 96000)
+	// Query OBS sample rate and speaker layout
 	uint32_t inRate = 48000;
+	enum speaker_layout layout = SPEAKERS_UNKNOWN;
+	if (source) {
+		layout = obs_source_get_speaker_layout(source);
+	}
 	struct obs_audio_info aoi;
-	if (obs_get_audio_info(&aoi) && aoi.samples_per_sec > 0) {
-		inRate = aoi.samples_per_sec;
+	if (obs_get_audio_info(&aoi)) {
+		if (aoi.samples_per_sec > 0)
+			inRate = aoi.samples_per_sec;
+		if (layout == SPEAKERS_UNKNOWN)
+			layout = aoi.speakers;
+	}
+	if (layout == SPEAKERS_UNKNOWN) {
+		layout = SPEAKERS_STEREO;
 	}
 
-	// Phase 1 Item 6: Use OBS audio_resampler_create (media-io) for 16kHz mono conversion
-	if (!m_resampler || m_resamplerInRate != inRate) {
+	// Use OBS audio_resampler_t (media-io/audio-resampler.h) converting to 16 kHz mono float
+	if (!m_resampler || m_resamplerInRate != inRate || m_resamplerLayout != layout) {
 		if (m_resampler) {
 			audio_resampler_destroy(m_resampler);
 			m_resampler = nullptr;
@@ -378,8 +385,8 @@ void AudioEngine::processAudio(const float *samples, uint32_t frames, bool muted
 
 		struct resample_info src_info;
 		src_info.samples_per_sec = inRate;
-		src_info.format = AUDIO_FORMAT_FLOAT;
-		src_info.speakers = SPEAKERS_MONO;
+		src_info.format = AUDIO_FORMAT_FLOAT_PLANAR;
+		src_info.speakers = layout;
 
 		struct resample_info dst_info;
 		dst_info.samples_per_sec = 16000;
@@ -388,41 +395,19 @@ void AudioEngine::processAudio(const float *samples, uint32_t frames, bool muted
 
 		m_resampler = audio_resampler_create(&dst_info, &src_info);
 		m_resamplerInRate = inRate;
+		m_resamplerLayout = layout;
 	}
 
 	if (m_resampler) {
 		uint8_t *output[MAX_AV_PLANES] = {nullptr};
 		uint32_t out_frames = 0;
 		uint64_t ts_offset = 0;
-		const uint8_t *const input[MAX_AV_PLANES] = {reinterpret_cast<const uint8_t *>(samples)};
-
-		bool ok = audio_resampler_resample(m_resampler, output, &out_frames, &ts_offset, input, frames);
+		bool ok = audio_resampler_resample(m_resampler, output, &out_frames, &ts_offset,
+						   (const uint8_t *const *)data->data, data->frames);
 		if (ok && out_frames > 0 && output[0]) {
-			const float *resampledSamples = reinterpret_cast<const float *>(output[0]);
-			m_core.pushPcmSamples(resampledSamples, out_frames);
-			return;
+			const float *resampled = reinterpret_cast<const float *>(output[0]);
+			m_core.pushPcmSamples(resampled, out_frames);
 		}
-	}
-
-	// Linear resampler fallback if media-io resampler is unallocated
-	const double ratio = static_cast<double>(inRate) / 16000.0;
-	m_resampleBuffer.clear();
-
-	while (m_resamplePos < static_cast<double>(frames) - 1.0) {
-		size_t idx0 = static_cast<size_t>(m_resamplePos);
-		size_t idx1 = idx0 + 1;
-		float frac = static_cast<float>(m_resamplePos - static_cast<double>(idx0));
-		float sample = (1.0f - frac) * samples[idx0] + frac * samples[idx1];
-
-		m_resampleBuffer.push_back(sample);
-		m_resamplePos += ratio;
-	}
-	m_resamplePos -= static_cast<double>(frames);
-	if (m_resamplePos < 0.0)
-		m_resamplePos = 0.0;
-
-	if (!m_resampleBuffer.empty()) {
-		m_core.pushPcmSamples(m_resampleBuffer.data(), m_resampleBuffer.size());
 	}
 }
 
