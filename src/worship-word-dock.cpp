@@ -313,6 +313,8 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 		&WorshipWordDock::onRawTranscriptPass);
 	connect(&AudioEngine::instance(), &AudioEngine::scriptureRefDetected, this,
 		&WorshipWordDock::onScriptureDetected);
+	connect(&AudioEngine::instance(), &AudioEngine::scriptureSuggestion, this,
+		&WorshipWordDock::showSuggestion);
 	connect(&AudioEngine::instance(), &AudioEngine::statusChanged, this,
 		[this](bool, const QString &) { updateAudioStatusPill(); });
 	connect(&AudioEngine::instance(), &AudioEngine::modelLoadedChanged, this,

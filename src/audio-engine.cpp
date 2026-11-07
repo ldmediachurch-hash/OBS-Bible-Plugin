@@ -218,6 +218,13 @@ AudioEngine::AudioEngine()
 	connect(&m_core, &DetectionCore::modelLoadedChanged, this, &AudioEngine::modelLoadedChanged);
 	connect(&m_core, &DetectionCore::rawTranscriptPass, this, &AudioEngine::rawTranscriptPass);
 	connect(&m_core, &DetectionCore::scriptureRefDetected, this, &AudioEngine::scriptureRefDetected);
+	connect(&m_core, &DetectionCore::scriptureSuggestion, this, &AudioEngine::scriptureSuggestion);
+
+	char *vadCfgInit = obs_module_config_path("models/ggml-silero-v5.1.2.bin");
+	if (vadCfgInit) {
+		m_core.setVadModelPath(std::string(vadCfgInit));
+		bfree(vadCfgInit);
+	}
 
 	loadModel();
 }
@@ -364,6 +371,7 @@ void AudioEngine::loadModel()
 	if (vadCfg) {
 		QString vadPath = QString::fromUtf8(vadCfg);
 		bfree(vadCfg);
+		m_core.setVadModelPath(vadPath.toStdString());
 		if (!QFile::exists(vadPath)) {
 			std::thread([vadPath]() {
 				QStringList args;

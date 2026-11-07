@@ -77,6 +77,8 @@ public:
 	void clearActiveSong();
 
 	void setPrimaryBible(const QString &abbrev);
+	void setVadModelPath(const std::string &path) { m_vadModelPath = path; }
+	std::string vadModelPath() const { return m_vadModelPath; }
 
 	// Ingestion: Feed 16 kHz float PCM samples (mono)
 	void pushPcmSamples(const float *samples, size_t count, double streamTimestampSec = -1.0);
@@ -101,6 +103,7 @@ signals:
 	void rawTranscriptPass(const QString &text, double timestampSec);
 	void scriptureRefDetected(const QString &label, int confidence, const QString &status, const QString &kind,
 				  double timestampSec);
+	void scriptureSuggestion(const ldsd::Ref &ref);
 	void modelLoadedChanged(bool loaded, const QString &statusText);
 	void stageTimed(const QString &stage, double ms);
 	void autoAdvanceRequested();
@@ -133,6 +136,7 @@ private:
 	QString m_modelStatusText{QStringLiteral("Model not loaded")};
 	QString m_modelPath;
 	QString m_backendInfo;
+	std::string m_vadModelPath;
 
 	// Ring buffer (10 seconds @ 16kHz = 160,000 samples)
 	static constexpr size_t kBufferSize = 160000;

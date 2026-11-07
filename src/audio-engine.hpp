@@ -77,6 +77,7 @@ signals:
 	void rawTranscriptPass(const QString &text, double timestampSec);
 	void scriptureRefDetected(const QString &label, int confidence, const QString &status, const QString &kind,
 				  double timestampSec);
+	void scriptureSuggestion(const ldsd::Ref &ref);
 	void statusChanged(bool listening, const QString &sourceName);
 	void modelLoadedChanged(bool loaded, const QString &statusText);
 	void modelDownloadProgress(int percent);

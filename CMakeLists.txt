@@ -200,9 +200,17 @@ if(BUILD_EVAL OR BUILD_TESTS)
     src/lyrics.hpp
     src/bible.cpp
     src/bible.hpp
+    src/scripture/scripture_detect.cpp
+    src/scripture/scripture_detect.hpp
+    src/scripture/scripture_bible_structure.hpp
   )
   target_link_libraries(ldww-eval PRIVATE Qt6::Core Qt6::Gui whisper)
-  target_include_directories(ldww-eval PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_include_directories(
+    ldww-eval
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/scripture
+  )
   set_target_properties(
     ldww-eval
     PROPERTIES AUTOMOC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON

@@ -10,12 +10,13 @@ the Free Software Foundation; either version 2 of the License, or
 
 #include "detection-core.hpp"
 #include "bible.hpp"
-#include "worship-word-dock.hpp"
 #include "scripture/scripture_bible_structure.hpp"
 
-#include <obs.h>
-#include <obs-module.h>
 #include <whisper.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #include <QDateTime>
 #include <QDir>
@@ -88,6 +89,7 @@ static bool isStockSilenceOutput(const std::string &segText)
 
 static bool isMostlyPrompt(const std::string &segText, const std::string &prompt)
 {
+	(void)prompt;
 	std::string cSeg = cleanWordForComparison(segText);
 	if (cSeg.empty())
 		return true;
@@ -753,13 +755,7 @@ void DetectionCore::runStreamingPass()
 				emit scriptureRefDetected(QString::fromStdString(r.label), rConf,
 							  QString::fromStdString(r.status),
 							  QString::fromStdString(r.kind), m_lastCommittedTimeSec);
-
-				auto *dock = WorshipWordDock::instance();
-				if (dock) {
-					QMetaObject::invokeMethod(dock, [dock, r]() {
-						dock->showSuggestion(r);
-					}, Qt::QueuedConnection);
-				}
+				emit scriptureSuggestion(r);
 
 				SpeechSuggestion sugg;
 				sugg.channel = Channel::Scripture;
@@ -795,13 +791,7 @@ void DetectionCore::runStreamingPass()
 				emit scriptureRefDetected(QString::fromStdString(r.label), rConf,
 							  QString::fromStdString(r.status),
 							  QString::fromStdString(r.kind), uncommitted.back().endTimeSec);
-
-				auto *dock = WorshipWordDock::instance();
-				if (dock) {
-					QMetaObject::invokeMethod(dock, [dock, r]() {
-						dock->showSuggestion(r);
-					}, Qt::QueuedConnection);
-				}
+				emit scriptureSuggestion(r);
 
 				SpeechSuggestion sugg;
 				sugg.channel = Channel::Scripture;
@@ -920,12 +910,7 @@ void DetectionCore::runStreamingPass()
 					emit scriptureRefDetected(QString::fromStdString(r.label), rConf,
 								  QString::fromStdString(r.status),
 								  QString::fromStdString(r.kind), uncommitted[forceIdx].endTimeSec);
-					auto *dock = WorshipWordDock::instance();
-					if (dock) {
-						QMetaObject::invokeMethod(dock, [dock, r]() {
-							dock->showSuggestion(r);
-						}, Qt::QueuedConnection);
-					}
+					emit scriptureSuggestion(r);
 					SpeechSuggestion sugg;
 					sugg.channel = Channel::Scripture;
 					sugg.reference = QString::fromStdString(r.label);
@@ -1008,13 +993,9 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 	wparams.audio_ctx = std::clamp(targetCtx, 384, 1500);
 
 	// Step 10: Silero VAD (built into whisper.cpp 1.7.6+)
-	char *vadCfg = obs_module_config_path("models/ggml-silero-v5.1.2.bin");
-	std::string vadPath = vadCfg ? vadCfg : "";
-	bfree(vadCfg);
-
-	if (!vadPath.empty() && QFile::exists(QString::fromStdString(vadPath))) {
+	if (!m_vadModelPath.empty() && QFile::exists(QString::fromStdString(m_vadModelPath))) {
 		wparams.vad = true;
-		wparams.vad_model_path = vadPath.c_str();
+		wparams.vad_model_path = m_vadModelPath.c_str();
 		wparams.vad_params = whisper_vad_default_params();
 	}
 
