@@ -65,6 +65,9 @@ signals:
 	void levelChanged(float level);
 	void suggestionDetected(Channel channel, const QString &reference, const QString &text, int confidence,
 				bool tentative, bool isNextSlide);
+	void rawTranscriptPass(const QString &text, double timestampSec);
+	void scriptureRefDetected(const QString &label, int confidence, const QString &status, const QString &kind,
+				  double timestampSec);
 	void statusChanged(bool listening, const QString &sourceName);
 	void modelLoadedChanged(bool loaded, const QString &statusText);
 

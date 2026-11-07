@@ -24,6 +24,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QLabel>
 #include <QMenu>
 #include <QPainter>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStyle>
@@ -212,9 +213,67 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 
 	root->addWidget(m_stack, 1);
 
+	// 5. Collapsible Transcript Debug Panel
+	m_transcriptToggleBtn = new QPushButton(QStringLiteral("▶  Transcript Debug"), this);
+	m_transcriptToggleBtn->setCheckable(true);
+	m_transcriptToggleBtn->setChecked(false);
+	m_transcriptToggleBtn->setStyleSheet(QStringLiteral(
+		"QPushButton { background: transparent; color: #8C93A0; text-align: left; padding: 4px 6px; "
+		"font-size: 11px; font-weight: 600; border: none; } "
+		"QPushButton:hover { color: #FFFFFF; }"));
+	root->addWidget(m_transcriptToggleBtn);
+
+	m_transcriptContainer = new QWidget(this);
+	auto *transLayout = new QVBoxLayout(m_transcriptContainer);
+	transLayout->setContentsMargins(0, 0, 0, 0);
+	transLayout->setSpacing(4);
+
+	auto *transHeader = new QHBoxLayout();
+	auto *transLabel = new QLabel(QStringLiteral("SPEECH & DETECTION LOG"), m_transcriptContainer);
+	QFont headerFont = font();
+	headerFont.setPointSize(8);
+	headerFont.setBold(true);
+	transLabel->setFont(headerFont);
+	transLabel->setStyleSheet(QStringLiteral("color: #64748B; letter-spacing: 0.5px;"));
+	transHeader->addWidget(transLabel);
+
+	auto *clearBtn = new QPushButton(QStringLiteral("Clear"), m_transcriptContainer);
+	clearBtn->setStyleSheet(QStringLiteral(
+		"QPushButton { background: rgba(255,255,255,0.06); color: #8C93A0; border: none; border-radius: 3px; "
+		"padding: 1px 8px; font-size: 10px; } QPushButton:hover { background: rgba(255,255,255,0.12); color: #FFF; }"));
+	connect(clearBtn, &QPushButton::clicked, this, [this]() {
+		if (m_transcriptView)
+			m_transcriptView->clear();
+	});
+	transHeader->addWidget(clearBtn);
+	transLayout->addLayout(transHeader);
+
+	m_transcriptView = new QPlainTextEdit(m_transcriptContainer);
+	m_transcriptView->setReadOnly(true);
+	m_transcriptView->setMaximumBlockCount(1000);
+	m_transcriptView->setFixedHeight(120);
+	m_transcriptView->setStyleSheet(QStringLiteral(
+		"QPlainTextEdit { background-color: #0B0D11; color: #94A3B8; "
+		"font-family: Menlo, Monaco, 'Courier New', monospace; font-size: 11px; "
+		"border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 4px; }"));
+	transLayout->addWidget(m_transcriptView);
+
+	m_transcriptContainer->setVisible(false);
+	root->addWidget(m_transcriptContainer);
+
+	connect(m_transcriptToggleBtn, &QPushButton::toggled, this, [this](bool checked) {
+		m_transcriptContainer->setVisible(checked);
+		m_transcriptToggleBtn->setText(checked ? QStringLiteral("▼  Transcript Debug")
+						       : QStringLiteral("▶  Transcript Debug"));
+	});
+
 	// Connect AudioEngine signals
 	connect(&AudioEngine::instance(), &AudioEngine::suggestionDetected, this,
 		&WorshipWordDock::onSuggestionDetected);
+	connect(&AudioEngine::instance(), &AudioEngine::rawTranscriptPass, this,
+		&WorshipWordDock::onRawTranscriptPass);
+	connect(&AudioEngine::instance(), &AudioEngine::scriptureRefDetected, this,
+		&WorshipWordDock::onScriptureDetected);
 	connect(&AudioEngine::instance(), &AudioEngine::statusChanged, this,
 		[this](bool, const QString &) { updateAudioStatusPill(); });
 	connect(&AudioEngine::instance(), &AudioEngine::modelLoadedChanged, this,
@@ -466,6 +525,37 @@ void WorshipWordDock::keyPressEvent(QKeyEvent *event)
 		return;
 	}
 	QWidget::keyPressEvent(event);
+}
+
+void WorshipWordDock::onRawTranscriptPass(const QString &text, double timestampSec)
+{
+	if (!m_transcriptView || text.trimmed().isEmpty())
+		return;
+
+	QString timeStr = timestampSec > 0.0
+		? QStringLiteral("%1s").arg(QString::number(timestampSec, 'f', 1))
+		: QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz"));
+
+	m_transcriptView->appendPlainText(
+		QStringLiteral("[%1] [Whisper] \"%2\"").arg(timeStr, text.trimmed()));
+	m_transcriptView->ensureCursorVisible();
+}
+
+void WorshipWordDock::onScriptureDetected(const QString &label, int confidence, const QString &status,
+					  const QString &kind, double timestampSec)
+{
+	if (!m_transcriptView)
+		return;
+
+	QString timeStr = timestampSec > 0.0
+		? QStringLiteral("%1s").arg(QString::number(timestampSec, 'f', 1))
+		: QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz"));
+
+	QString logMsg = QStringLiteral("[%1] ==> DETECT: %2 (%3%) [status=%4, kind=%5]")
+		.arg(timeStr, label, QString::number(confidence), status, kind);
+
+	m_transcriptView->appendPlainText(logMsg);
+	m_transcriptView->ensureCursorVisible();
 }
 
 void WorshipWordDock::loadConfig() {}

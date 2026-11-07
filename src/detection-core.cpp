@@ -434,6 +434,9 @@ void DetectionCore::analyzeBuffer(const std::vector<float> &chunk, double window
 	if (!tentativeText.isEmpty()) {
 		emit transcriptTentative(tentativeText, windowEndSec);
 	}
+	if (!transcript.trimmed().isEmpty()) {
+		emit rawTranscriptPass(transcript.trimmed(), windowEndSec);
+	}
 
 	if (m_debugLogging.load(std::memory_order_relaxed)) {
 		fprintf(stderr,
@@ -459,6 +462,11 @@ void DetectionCore::analyzeBuffer(const std::vector<float> &chunk, double window
 		auto refs = m_liveScripture->push(newText, isFinal, nowMs);
 		for (const auto &r : refs) {
 			scriptureMatched = true;
+			int rConf = static_cast<int>(std::round(r.confidence * 100.0));
+			emit scriptureRefDetected(QString::fromStdString(r.label), rConf,
+						  QString::fromStdString(r.status),
+						  QString::fromStdString(r.kind), windowEndSec);
+
 			auto *dock = WorshipWordDock::instance();
 			if (dock) {
 				QMetaObject::invokeMethod(dock, [dock, r]() {

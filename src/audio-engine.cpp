@@ -105,6 +105,8 @@ AudioEngine::AudioEngine()
 	});
 
 	connect(&m_core, &DetectionCore::modelLoadedChanged, this, &AudioEngine::modelLoadedChanged);
+	connect(&m_core, &DetectionCore::rawTranscriptPass, this, &AudioEngine::rawTranscriptPass);
+	connect(&m_core, &DetectionCore::scriptureRefDetected, this, &AudioEngine::scriptureRefDetected);
 
 	loadModel();
 }

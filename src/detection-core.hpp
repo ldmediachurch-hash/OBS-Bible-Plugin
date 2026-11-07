@@ -91,6 +91,9 @@ signals:
 	void suggestionDetected(const SpeechSuggestion &sugg);
 	void transcriptCommitted(const QString &text, double timestampSec);
 	void transcriptTentative(const QString &text, double timestampSec);
+	void rawTranscriptPass(const QString &text, double timestampSec);
+	void scriptureRefDetected(const QString &label, int confidence, const QString &status, const QString &kind,
+				  double timestampSec);
 	void modelLoadedChanged(bool loaded, const QString &statusText);
 	void stageTimed(const QString &stage, double ms);
 	void autoAdvanceRequested();

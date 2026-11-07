@@ -20,6 +20,7 @@ the Free Software Foundation; either version 2 of the License, or
 class QComboBox;
 class QLabel;
 class QPushButton;
+class QPlainTextEdit;
 class QStackedWidget;
 class QToolButton;
 
@@ -62,6 +63,9 @@ private slots:
 	void acceptSuggestion(bool goLive);
 	void dismissSuggestion();
 	void openAudioStatusMenu();
+	void onRawTranscriptPass(const QString &text, double timestampSec);
+	void onScriptureDetected(const QString &label, int confidence, const QString &status, const QString &kind,
+				 double timestampSec);
 
 protected:
 	void keyPressEvent(QKeyEvent *event) override;
@@ -106,4 +110,9 @@ private:
 	ldsd::Ref m_currentScriptureRef;
 	QTimer *m_suggestionTimer = nullptr;
 	static inline WorshipWordDock *s_instance = nullptr;
+
+	// Transcript debug panel
+	QPushButton *m_transcriptToggleBtn = nullptr;
+	QWidget *m_transcriptContainer = nullptr;
+	QPlainTextEdit *m_transcriptView = nullptr;
 };
