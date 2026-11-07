@@ -30,6 +30,12 @@ the Free Software Foundation; either version 2 of the License, or
 
 struct whisper_context;
 
+struct TimedWord {
+	std::string text;
+	double startTimeSec = 0.0;
+	double endTimeSec = 0.0;
+};
+
 struct SpeechSuggestion {
 	Channel channel = Channel::Scripture;
 	QString reference; // e.g. "Romans 8:28" or "Amazing Grace · Verse 2"
@@ -104,6 +110,8 @@ private:
 	void workerLoop();
 
 	void analyzeBuffer(const std::vector<float> &chunk, double windowEndSec);
+	void runStreamingPass();
+	std::vector<TimedWord> transcribeWords(const std::vector<float> &audio, double bufStartSec);
 	QString transcribeChunk(const std::vector<float> &chunk);
 	void rebuildScriptureIndex();
 
@@ -134,10 +142,14 @@ private:
 	std::atomic<bool> m_workerRunning{false};
 	std::unique_ptr<std::thread> m_workerThread;
 
-	// LocalAgreement-2 transcript stabilizer state
-	QStringList m_prevHypothesisWords;
-	QStringList m_committedWords;
-	QStringList m_tentativeWords;
+	// LocalAgreement-2 Streaming state
+	std::vector<float> m_streamBuffer;
+	double m_bufStartSec = 0.0;
+	size_t m_lastProcessedSamples = 0;
+	double m_lastCommittedTimeSec = -1.0;
+	double m_lastCommittedSentenceEndSec = -1.0;
+	std::vector<TimedWord> m_prevPassWords;
+	std::string m_committedHistory;
 
 	// Context memory for follow-on verses (e.g. "verse 29", "the next verse", "chapter 9")
 	QString m_contextBook;

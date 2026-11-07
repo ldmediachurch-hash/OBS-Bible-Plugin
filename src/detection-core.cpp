@@ -30,6 +30,26 @@ the Free Software Foundation; either version 2 of the License, or
 
 namespace {
 
+static std::string cleanWordForComparison(const std::string &w)
+{
+	std::string res;
+	res.reserve(w.size());
+	for (char c : w) {
+		if (std::isalnum(static_cast<unsigned char>(c))) {
+			res += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+	}
+	return res;
+}
+
+static bool isSentenceEndWord(const std::string &w)
+{
+	if (w.empty())
+		return false;
+	char last = w.back();
+	return (last == '.' || last == '?' || last == '!' || last == ';');
+}
+
 static std::string bookToOsis(int bookNumber, const QString &bookName)
 {
 	if (bookNumber >= 1 && bookNumber <= 66) {
@@ -294,9 +314,13 @@ void DetectionCore::reset()
 	m_readIndex.store(0, std::memory_order_release);
 	m_streamTimeSec.store(0.0, std::memory_order_relaxed);
 	m_lastSuggestedRef.clear();
-	m_prevHypothesisWords.clear();
-	m_committedWords.clear();
-	m_tentativeWords.clear();
+	m_streamBuffer.clear();
+	m_bufStartSec = 0.0;
+	m_lastProcessedSamples = 0;
+	m_lastCommittedTimeSec = -1.0;
+	m_lastCommittedSentenceEndSec = -1.0;
+	m_prevPassWords.clear();
+	m_committedHistory.clear();
 	m_contextBook.clear();
 	m_contextChapter = 0;
 	m_contextVerse = 0;
@@ -323,195 +347,220 @@ void DetectionCore::stopWorker()
 
 void DetectionCore::workerLoop()
 {
-	// Phase 1: 3.0s window with 0.75s hop
-	constexpr size_t kChunkSize = 48000; // 3.0 seconds @ 16kHz
-	constexpr size_t kHopSize = 12000;   // 0.75 seconds @ 16kHz (75% overlap)
-
-	std::vector<float> chunk(kChunkSize, 0.0f);
-
 	while (m_workerRunning.load(std::memory_order_relaxed)) {
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
 		size_t w = m_writeIndex.load(std::memory_order_acquire);
 		size_t r = m_readIndex.load(std::memory_order_relaxed);
 
-		size_t available = (w >= r) ? (w - r) : (kBufferSize - r + w);
-		if (available < kChunkSize)
-			continue;
+		if (w != r) {
+			size_t available = (w >= r) ? (w - r) : (kBufferSize - r + w);
+			if (m_streamBuffer.empty()) {
+				double streamNow = m_streamTimeSec.load(std::memory_order_relaxed);
+				m_bufStartSec = std::max(0.0, streamNow - (static_cast<double>(available) / 16000.0));
+			}
 
-		size_t tempR = r;
-		for (size_t i = 0; i < kChunkSize; i++) {
-			chunk[i] = m_ringBuffer[tempR];
-			tempR = (tempR + 1) % kBufferSize;
+			size_t tempR = r;
+			for (size_t i = 0; i < available; i++) {
+				m_streamBuffer.push_back(m_ringBuffer[tempR]);
+				tempR = (tempR + 1) % kBufferSize;
+			}
+			m_readIndex.store(tempR, std::memory_order_release);
 		}
 
-		r = (r + kHopSize) % kBufferSize;
-		m_readIndex.store(r, std::memory_order_release);
+		size_t curSize = m_streamBuffer.size();
+		if (curSize < static_cast<size_t>(2.5 * 16000))
+			continue;
 
-		double streamNow = m_streamTimeSec.load(std::memory_order_relaxed);
-		analyzeBuffer(chunk, streamNow);
+		if (curSize - m_lastProcessedSamples < static_cast<size_t>(1.0 * 16000))
+			continue;
+
+		runStreamingPass();
 	}
 }
 
 void DetectionCore::processWindowDirect(const std::vector<float> &chunk, double windowEndSec)
 {
-	analyzeBuffer(chunk, windowEndSec);
+	if (chunk.empty())
+		return;
+
+	if (m_streamBuffer.empty()) {
+		m_bufStartSec = std::max(0.0, windowEndSec - (static_cast<double>(chunk.size()) / 16000.0));
+	}
+	m_streamBuffer.insert(m_streamBuffer.end(), chunk.begin(), chunk.end());
+	runStreamingPass();
 }
 
 void DetectionCore::analyzeBuffer(const std::vector<float> &chunk, double windowEndSec)
 {
-	auto tStart = std::chrono::steady_clock::now();
-	Channel ch = m_channel.load(std::memory_order_relaxed);
+	processWindowDirect(chunk, windowEndSec);
+}
 
-	// 1. Voice activity detection: check sub-blocks
-	float maxSubRms = 0.0f;
-	constexpr size_t subSize = 3200; // 200ms @ 16kHz
-	for (size_t i = 0; i + subSize <= chunk.size(); i += subSize) {
-		float subSum = 0.0f;
-		for (size_t j = 0; j < subSize; ++j) {
-			float s = chunk[i + j];
-			subSum += s * s;
-		}
-		float subRms = sqrtf(subSum / static_cast<float>(subSize));
-		if (subRms > maxSubRms)
-			maxSubRms = subRms;
+void DetectionCore::runStreamingPass()
+{
+	if (m_streamBuffer.size() < static_cast<size_t>(2.5 * 16000))
+		return;
+
+	// Hard cap the buffer at 15s
+	constexpr size_t kMaxBufferSamples = 15 * 16000;
+	if (m_streamBuffer.size() > kMaxBufferSamples) {
+		size_t drop = m_streamBuffer.size() - kMaxBufferSamples;
+		m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
+		m_bufStartSec += static_cast<double>(drop) / 16000.0;
 	}
 
-	auto tVad = std::chrono::steady_clock::now();
-	double vadMs = std::chrono::duration<double, std::milli>(tVad - tStart).count();
-	emit stageTimed(QStringLiteral("VAD"), vadMs);
+	double bufStart = m_bufStartSec;
+	std::vector<float> audioCopy = m_streamBuffer;
 
-	// Phase 2 VAD: In Scripture mode threshold is 0.0030f; in Worship mode looser 0.0012f
-	const float vadThreshold = (ch == Channel::Lyrics) ? 0.0012f : 0.0030f;
-	if (maxSubRms < vadThreshold)
-		return;
+	// Transcribe words with token timestamps
+	std::vector<TimedWord> words = transcribeWords(audioCopy, bufStart);
 
-	// 2. Whisper transcription
-	QString transcript = transcribeChunk(chunk);
-	auto tWhisper = std::chrono::steady_clock::now();
-	double whisperMs = std::chrono::duration<double, std::milli>(tWhisper - tVad).count();
-	emit stageTimed(QStringLiteral("Whisper"), whisperMs);
-
-	if (transcript.trimmed().isEmpty())
-		return;
-
-	// 3. LocalAgreement-2 transcript stabilizer
-	QStringList hypWords = transcript.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-	if (!hypWords.isEmpty()) {
-		// Find agreement between previous hypothesis and current hypothesis
-		int agreementCount = 0;
-		const int maxCheck = std::min(m_prevHypothesisWords.size(), hypWords.size());
-		for (int i = 0; i < maxCheck; ++i) {
-			if (m_prevHypothesisWords[i].compare(hypWords[i], Qt::CaseInsensitive) == 0) {
-				agreementCount++;
-			} else {
-				break;
-			}
+	// Drop words that end before the last committed word's end time (already committed)
+	std::vector<TimedWord> uncommitted;
+	for (const auto &w : words) {
+		if (w.endTimeSec > m_lastCommittedTimeSec + 0.05) {
+			uncommitted.push_back(w);
 		}
+	}
 
-		if (agreementCount > 0) {
-			for (int i = 0; i < agreementCount; ++i) {
-				m_committedWords.append(hypWords[i]);
-			}
-			// Keep committed words bounded to last 35 words
-			if (m_committedWords.size() > 35) {
-				m_committedWords = m_committedWords.mid(m_committedWords.size() - 35);
-			}
-			m_tentativeWords = hypWords.mid(agreementCount);
+	// Compare the remaining words with the previous pass
+	size_t prefixLen = 0;
+	while (prefixLen < uncommitted.size() && prefixLen < m_prevPassWords.size()) {
+		if (cleanWordForComparison(uncommitted[prefixLen].text) ==
+		    cleanWordForComparison(m_prevPassWords[prefixLen].text)) {
+			prefixLen++;
 		} else {
-			m_tentativeWords = hypWords;
+			break;
 		}
-
-		m_prevHypothesisWords = hypWords;
 	}
 
-	const QString committedText = m_committedWords.join(QLatin1Char(' '));
-	const QString tentativeText = m_tentativeWords.join(QLatin1Char(' '));
-	const QString combinedText = committedText.isEmpty() ? tentativeText
-							     : (committedText + QLatin1Char(' ') + tentativeText);
-
-	emit transcriptCommitted(committedText, windowEndSec);
-	if (!tentativeText.isEmpty()) {
-		emit transcriptTentative(tentativeText, windowEndSec);
-	}
-	if (!transcript.trimmed().isEmpty()) {
-		emit rawTranscriptPass(transcript.trimmed(), windowEndSec);
-	}
-
-	if (m_debugLogging.load(std::memory_order_relaxed)) {
-		fprintf(stderr,
-			"[LDWW Core] @ %.2fs: [Committed: \"%s\"] [Tentative: \"%s\"] (VAD=%.1fms, Whisper=%.1fms)\n",
-			windowEndSec, committedText.toUtf8().constData(), tentativeText.toUtf8().constData(), vadMs,
-			whisperMs);
-	}
-
-	// 4. Pattern matching with ldsd::LiveScripture for Scripture and fuzzy matcher for Lyrics
-	auto tMatchStart = std::chrono::steady_clock::now();
+	int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
 
 	if (m_bibleReloadNeeded.exchange(false, std::memory_order_acq_rel) || !m_liveScripture) {
 		rebuildScriptureIndex();
 	}
 
-	int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count();
-	std::string newText = transcript.trimmed().toStdString();
-	bool isFinal = true;
-
-	bool scriptureMatched = false;
-	if (m_liveScripture && !newText.empty()) {
-		auto refs = m_liveScripture->push(newText, isFinal, nowMs);
-		for (const auto &r : refs) {
-			scriptureMatched = true;
-			int rConf = static_cast<int>(std::round(r.confidence * 100.0));
-			emit scriptureRefDetected(QString::fromStdString(r.label), rConf,
-						  QString::fromStdString(r.status),
-						  QString::fromStdString(r.kind), windowEndSec);
-
-			auto *dock = WorshipWordDock::instance();
-			if (dock) {
-				QMetaObject::invokeMethod(dock, [dock, r]() {
-					dock->showSuggestion(r);
-				}, Qt::QueuedConnection);
+	// 1. Send committed words (final = true)
+	if (prefixLen > 0) {
+		std::string committedText;
+		for (size_t i = 0; i < prefixLen; ++i) {
+			if (i > 0)
+				committedText += " ";
+			committedText += uncommitted[i].text;
+			if (isSentenceEndWord(uncommitted[i].text)) {
+				m_lastCommittedSentenceEndSec = uncommitted[i].endTimeSec;
 			}
+		}
+		m_lastCommittedTimeSec = uncommitted[prefixLen - 1].endTimeSec;
+		m_committedHistory += " " + committedText;
+		if (m_committedHistory.size() > 1000) {
+			m_committedHistory = m_committedHistory.substr(m_committedHistory.size() - 800);
+		}
 
-			SpeechSuggestion sugg;
-			sugg.channel = Channel::Scripture;
-			sugg.reference = QString::fromStdString(r.label);
-			sugg.text = QString::fromStdString(r.text);
-			sugg.confidence = static_cast<int>(std::round(r.confidence * 100.0));
-			sugg.tentative = (r.status == "preview");
-			sugg.timestampSeconds = windowEndSec;
-			emit suggestionDetected(sugg);
+		emit transcriptCommitted(QString::fromStdString(committedText), m_lastCommittedTimeSec);
+		emit rawTranscriptPass(QString::fromStdString(committedText), m_lastCommittedTimeSec);
+
+		if (m_liveScripture) {
+			auto refs = m_liveScripture->push(committedText, true, nowMs);
+			for (const auto &r : refs) {
+				int rConf = static_cast<int>(std::round(r.confidence * 100.0));
+				emit scriptureRefDetected(QString::fromStdString(r.label), rConf,
+							  QString::fromStdString(r.status),
+							  QString::fromStdString(r.kind), m_lastCommittedTimeSec);
+
+				auto *dock = WorshipWordDock::instance();
+				if (dock) {
+					QMetaObject::invokeMethod(dock, [dock, r]() {
+						dock->showSuggestion(r);
+					}, Qt::QueuedConnection);
+				}
+
+				SpeechSuggestion sugg;
+				sugg.channel = Channel::Scripture;
+				sugg.reference = QString::fromStdString(r.label);
+				sugg.text = QString::fromStdString(r.text);
+				sugg.confidence = rConf;
+				sugg.tentative = (r.status == "preview");
+				sugg.timestampSeconds = m_lastCommittedTimeSec;
+				emit suggestionDetected(sugg);
+			}
+		}
+
+		if (m_channel.load(std::memory_order_relaxed) == Channel::Lyrics) {
+			detectLyrics(QString::fromStdString(committedText), m_lastCommittedTimeSec, false);
 		}
 	}
 
-	if (ch == Channel::Scripture) {
-		if (!scriptureMatched) {
-			detectLyrics(combinedText, windowEndSec, false);
+	// 2. Send interim words (final = false)
+	if (prefixLen < uncommitted.size()) {
+		std::string interimText;
+		for (size_t i = prefixLen; i < uncommitted.size(); ++i) {
+			if (!interimText.empty())
+				interimText += " ";
+			interimText += uncommitted[i].text;
 		}
+
+		emit transcriptTentative(QString::fromStdString(interimText), uncommitted.back().endTimeSec);
+
+		if (m_liveScripture) {
+			auto refs = m_liveScripture->push(interimText, false, nowMs);
+			for (const auto &r : refs) {
+				int rConf = static_cast<int>(std::round(r.confidence * 100.0));
+				emit scriptureRefDetected(QString::fromStdString(r.label), rConf,
+							  QString::fromStdString(r.status),
+							  QString::fromStdString(r.kind), uncommitted.back().endTimeSec);
+
+				auto *dock = WorshipWordDock::instance();
+				if (dock) {
+					QMetaObject::invokeMethod(dock, [dock, r]() {
+						dock->showSuggestion(r);
+					}, Qt::QueuedConnection);
+				}
+
+				SpeechSuggestion sugg;
+				sugg.channel = Channel::Scripture;
+				sugg.reference = QString::fromStdString(r.label);
+				sugg.text = QString::fromStdString(r.text);
+				sugg.confidence = rConf;
+				sugg.tentative = true;
+				sugg.timestampSeconds = uncommitted.back().endTimeSec;
+				emit suggestionDetected(sugg);
+			}
+		}
+
+		m_prevPassWords = std::vector<TimedWord>(uncommitted.begin() + prefixLen, uncommitted.end());
 	} else {
-		if (!detectLyrics(combinedText, windowEndSec, false)) {
-			// Scripture fallback handled above
+		m_prevPassWords.clear();
+	}
+
+	// 3. Move buf_start forward only to the end of a committed sentence, and only when buffer > 8s
+	double bufDurationSec = static_cast<double>(m_streamBuffer.size()) / 16000.0;
+	if (bufDurationSec > 8.0 && m_lastCommittedSentenceEndSec > m_bufStartSec) {
+		double trimSec = m_lastCommittedSentenceEndSec - m_bufStartSec;
+		size_t drop = std::min(m_streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
+		if (drop > 0) {
+			m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
+			m_bufStartSec += static_cast<double>(drop) / 16000.0;
 		}
 	}
 
-	auto tMatchEnd = std::chrono::steady_clock::now();
-	double matchMs = std::chrono::duration<double, std::milli>(tMatchEnd - tMatchStart).count();
-	emit stageTimed(QStringLiteral("Matcher"), matchMs);
+	m_lastProcessedSamples = m_streamBuffer.size();
 }
 
-QString DetectionCore::transcribeChunk(const std::vector<float> &chunk)
+std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &audio, double bufStartSec)
 {
+	std::vector<TimedWord> words;
 	std::lock_guard<std::mutex> lock(m_whisperMutex);
-	if (!m_whisperCtx)
-		return QString();
+	if (!m_whisperCtx || audio.empty())
+		return words;
 
 	whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
 	wparams.strategy = WHISPER_SAMPLING_GREEDY;
 	wparams.temperature_inc = 0.0f;
-	wparams.no_timestamps = true;
+	wparams.no_timestamps = false;
 	wparams.token_timestamps = true;
-	wparams.single_segment = true;
+	wparams.single_segment = false;
 	wparams.suppress_blank = true;
 	wparams.no_speech_thold = 0.6f;
 	wparams.print_progress = false;
@@ -522,34 +571,58 @@ QString DetectionCore::transcribeChunk(const std::vector<float> &chunk)
 	wparams.translate = false;
 	wparams.no_context = true;
 	wparams.n_threads = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
+	wparams.audio_ctx = 0;
 
-	// Phase 1: audio_ctx matches 3.0s window length (3000ms / 20 = 150 frames)
-	// Stops Whisper from padding every window to 30 seconds!
-	wparams.audio_ctx = 150;
-
-	// Phase 2: Short neutral prompt + last ~20 committed words for context
-	static const QString basePrompt =
-		QStringLiteral("Sermon scripture reading and hymn lyrics like Romans 8:28, John 3:16. ");
-	QString contextPrompt = basePrompt;
-	if (!m_committedWords.isEmpty()) {
-		int start = std::max(0, static_cast<int>(m_committedWords.size()) - 20);
-		contextPrompt += m_committedWords.mid(start).join(QLatin1Char(' '));
+	// Prompt: "A sermon. The preacher reads from the Bible." + last ~200 characters of committed text
+	std::string prompt = "A sermon. The preacher reads from the Bible.";
+	if (!m_committedHistory.empty()) {
+		size_t take = std::min(m_committedHistory.size(), static_cast<size_t>(200));
+		prompt += " " + m_committedHistory.substr(m_committedHistory.size() - take);
 	}
-	QByteArray promptBytes = contextPrompt.toUtf8();
-	wparams.initial_prompt = promptBytes.constData();
+	wparams.initial_prompt = prompt.c_str();
 
-	if (whisper_full(m_whisperCtx, wparams, chunk.data(), static_cast<int>(chunk.size())) != 0) {
-		return QString();
+	if (whisper_full(m_whisperCtx, wparams, audio.data(), static_cast<int>(audio.size())) != 0) {
+		return words;
 	}
 
-	QString result;
 	int n_segments = whisper_full_n_segments(m_whisperCtx);
-	for (int i = 0; i < n_segments; i++) {
-		const char *text = whisper_full_get_segment_text(m_whisperCtx, i);
-		if (text)
-			result += QString::fromUtf8(text) + QStringLiteral(" ");
+	for (int s = 0; s < n_segments; ++s) {
+		int n_tokens = whisper_full_n_tokens(m_whisperCtx, s);
+		for (int t = 0; t < n_tokens; ++t) {
+			const char *txt = whisper_full_get_token_text(m_whisperCtx, s, t);
+			if (!txt || txt[0] == '\0')
+				continue;
+			whisper_token_data data = whisper_full_get_token_data(m_whisperCtx, s, t);
+			std::string tokenStr(txt);
+
+			bool isStartOfWord = (tokenStr[0] == ' ' || tokenStr[0] == '\t' || tokenStr[0] == '\n');
+			if (isStartOfWord || words.empty()) {
+				std::string w = isStartOfWord ? tokenStr.substr(1) : tokenStr;
+				if (!w.empty()) {
+					double t0 = bufStartSec + (static_cast<double>(data.t0) * 0.01);
+					double t1 = bufStartSec + (static_cast<double>(data.t1) * 0.01);
+					words.push_back({w, t0, t1});
+				}
+			} else {
+				words.back().text += tokenStr;
+				double t1 = bufStartSec + (static_cast<double>(data.t1) * 0.01);
+				words.back().endTimeSec = std::max(words.back().endTimeSec, t1);
+			}
+		}
 	}
-	return result.trimmed();
+	return words;
+}
+
+QString DetectionCore::transcribeChunk(const std::vector<float> &chunk)
+{
+	auto words = transcribeWords(chunk, 0.0);
+	QString res;
+	for (size_t i = 0; i < words.size(); ++i) {
+		if (i > 0)
+			res += QLatin1Char(' ');
+		res += QString::fromStdString(words[i].text);
+	}
+	return res;
 }
 
 QString DetectionCore::normalizeSpokenText(QString s)
