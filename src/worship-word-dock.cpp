@@ -9,6 +9,7 @@ the Free Software Foundation; either version 2 of the License, or
 */
 
 #include "worship-word-dock.hpp"
+#include "scripture/scripture_bible_structure.hpp"
 
 #include <obs-module.h>
 
@@ -69,6 +70,7 @@ void ConfidenceBarWidget::paintEvent(QPaintEvent *)
 
 WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 {
+	s_instance = this;
 	auto *root = new QVBoxLayout(this);
 	root->setContentsMargins(6, 6, 6, 6);
 	root->setSpacing(6);
@@ -226,6 +228,8 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 
 WorshipWordDock::~WorshipWordDock()
 {
+	if (s_instance == this)
+		s_instance = nullptr;
 	saveConfig();
 }
 
@@ -365,6 +369,55 @@ void WorshipWordDock::onSuggestionDetected(Channel ch, const QString &ref, const
 	});
 }
 
+void WorshipWordDock::showSuggestion(const ldsd::Ref &ref)
+{
+	m_suggestedChannel = Channel::Scripture;
+	m_currentScriptureRef = ref;
+	m_suggestedRef = QString::fromStdString(ref.label);
+	m_suggestedText = QString::fromStdString(ref.text);
+	m_confidence = static_cast<int>(std::round(ref.confidence * 100.0));
+	m_isTentative = (ref.status == "preview");
+	m_isNext = false;
+
+	QString kicker;
+	if (ref.status == "preview") {
+		kicker = QStringLiteral("PREVIEW · %1%").arg(m_confidence);
+	} else if (ref.status == "refined") {
+		kicker = QStringLiteral("REFINED · %1%").arg(m_confidence);
+	} else {
+		kicker = QStringLiteral("HEARD · %1%").arg(m_confidence);
+	}
+
+	if (ref.kind == "quote") {
+		kicker = QStringLiteral("QUOTE · ") + kicker;
+	}
+
+	m_suggestionKicker->setText(kicker);
+	m_suggestionTitle->setText(QStringLiteral("%1 %2%").arg(QString::fromStdString(ref.label)).arg(m_confidence));
+
+	if (m_confidenceBar) {
+		m_confidenceBar->setConfidence(m_confidence);
+	}
+
+	if (m_showBtn) {
+		m_showBtn->setEnabled(ref.status != "preview");
+	}
+
+	m_suggestionCard->setVisible(true);
+
+	if (m_suggestionTimer) {
+		m_suggestionTimer->stop();
+	} else {
+		m_suggestionTimer = new QTimer(this);
+		m_suggestionTimer->setSingleShot(true);
+		connect(m_suggestionTimer, &QTimer::timeout, this, [this]() {
+			if (m_suggestionCard->isVisible())
+				m_suggestionCard->setVisible(false);
+		});
+	}
+	m_suggestionTimer->start(15000);
+}
+
 void WorshipWordDock::acceptSuggestion(bool goLive)
 {
 	m_suggestionCard->setVisible(false);
@@ -377,8 +430,24 @@ void WorshipWordDock::acceptSuggestion(bool goLive)
 		}
 	} else {
 		setMode(1);
-		m_scripture->showQuery(m_suggestedRef, false);
-		if (goLive) {
+		int bookNum = 0;
+		if (!m_currentScriptureRef.book.empty()) {
+			const auto &bStruct = ldsd::bibleStructure();
+			for (size_t i = 0; i < bStruct.size(); ++i) {
+				if (bStruct[i].id == m_currentScriptureRef.book) {
+					bookNum = static_cast<int>(i + 1);
+					break;
+				}
+			}
+		}
+		if (bookNum > 0) {
+			m_scripture->openReference(bookNum, m_currentScriptureRef.chapter,
+						   m_currentScriptureRef.verse, m_currentScriptureRef.verseEnd);
+		} else {
+			m_scripture->showQuery(m_suggestedRef, true);
+		}
+
+		if (goLive && m_currentScriptureRef.status != "preview") {
 			m_scripture->goLive();
 		}
 	}

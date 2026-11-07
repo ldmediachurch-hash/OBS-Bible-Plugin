@@ -13,6 +13,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include "audio-engine.hpp"
 #include "dock.hpp"
 #include "lyrics-dock.hpp"
+#include "scripture/scripture_detect.hpp"
 
 #include <QWidget>
 
@@ -38,8 +39,11 @@ class WorshipWordDock : public QWidget {
 	Q_OBJECT
 
 public:
+	static WorshipWordDock *instance() { return s_instance; }
 	explicit WorshipWordDock(QWidget *parent = nullptr);
 	~WorshipWordDock() override;
+
+	void showSuggestion(const ldsd::Ref &ref);
 
 	void saveConfig();
 
@@ -98,4 +102,8 @@ private:
 	int m_confidence = 0;
 	bool m_isTentative = false;
 	bool m_isNext = false;
+
+	ldsd::Ref m_currentScriptureRef;
+	QTimer *m_suggestionTimer = nullptr;
+	static inline WorshipWordDock *s_instance = nullptr;
 };
