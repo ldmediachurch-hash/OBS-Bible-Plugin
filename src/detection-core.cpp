@@ -10,7 +10,10 @@ the Free Software Foundation; either version 2 of the License, or
 
 #include "detection-core.hpp"
 #include "bible.hpp"
+#include "worship-word-dock.hpp"
+#include "scripture/scripture_bible_structure.hpp"
 
+#include <obs.h>
 #include <whisper.h>
 
 #include <QDateTime>
@@ -24,6 +27,62 @@ the Free Software Foundation; either version 2 of the License, or
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+
+namespace {
+
+static std::string bookToOsis(int bookNumber, const QString &bookName)
+{
+	if (bookNumber >= 1 && bookNumber <= 66) {
+		const auto &books = ldsd::bibleStructure();
+		if (static_cast<size_t>(bookNumber - 1) < books.size()) {
+			return books[bookNumber - 1].id;
+		}
+	}
+
+	const QString norm = Canon::normalize(bookName);
+	for (const auto &b : ldsd::bibleStructure()) {
+		if (norm == Canon::normalize(QString::fromStdString(b.name)) ||
+		    norm == Canon::normalize(QString::fromStdString(b.id))) {
+			return b.id;
+		}
+	}
+
+	if (bookNumber >= 1 && bookNumber <= Canon::count()) {
+		const QString engName = Canon::normalize(Canon::englishName(bookNumber));
+		for (const auto &b : ldsd::bibleStructure()) {
+			if (engName == Canon::normalize(QString::fromStdString(b.name))) {
+				return b.id;
+			}
+		}
+	}
+
+	return std::string();
+}
+
+static std::vector<ldsd::Verse> buildVerseList(const BiblePtr &bible)
+{
+	std::vector<ldsd::Verse> verses;
+	if (!bible)
+		return verses;
+	bible->ensureLoaded();
+	verses.reserve(31102);
+	for (const auto &b : bible->books) {
+		std::string osis = bookToOsis(b.number, b.name);
+		if (osis.empty())
+			continue;
+		for (size_t c = 0; c < b.chapters.size(); ++c) {
+			int chNum = static_cast<int>(c + 1);
+			const auto &chapVerses = b.chapters[c];
+			for (int v = 0; v < chapVerses.size(); ++v) {
+				int vNum = v + 1;
+				verses.push_back({osis, chNum, vNum, chapVerses[v].toStdString()});
+			}
+		}
+	}
+	return verses;
+}
+
+} // namespace
 
 DetectionCore::DetectionCore(QObject *parent) : QObject(parent)
 {
@@ -383,16 +442,48 @@ void DetectionCore::analyzeBuffer(const std::vector<float> &chunk, double window
 			whisperMs);
 	}
 
-	// 4. Pattern matching on committed + tentative
+	// 4. Pattern matching with ldsd::LiveScripture for Scripture and fuzzy matcher for Lyrics
 	auto tMatchStart = std::chrono::steady_clock::now();
 
+	if (m_bibleReloadNeeded.exchange(false, std::memory_order_acq_rel) || !m_liveScripture) {
+		rebuildScriptureIndex();
+	}
+
+	int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	std::string newText = transcript.trimmed().toStdString();
+	bool isFinal = true;
+
+	bool scriptureMatched = false;
+	if (m_liveScripture && !newText.empty()) {
+		auto refs = m_liveScripture->push(newText, isFinal, nowMs);
+		for (const auto &r : refs) {
+			scriptureMatched = true;
+			auto *dock = WorshipWordDock::instance();
+			if (dock) {
+				QMetaObject::invokeMethod(dock, [dock, r]() {
+					dock->showSuggestion(r);
+				}, Qt::QueuedConnection);
+			}
+
+			SpeechSuggestion sugg;
+			sugg.channel = Channel::Scripture;
+			sugg.reference = QString::fromStdString(r.label);
+			sugg.text = QString::fromStdString(r.text);
+			sugg.confidence = static_cast<int>(std::round(r.confidence * 100.0));
+			sugg.tentative = (r.status == "preview");
+			sugg.timestampSeconds = windowEndSec;
+			emit suggestionDetected(sugg);
+		}
+	}
+
 	if (ch == Channel::Scripture) {
-		if (!detectScripture(combinedText, windowEndSec, false)) {
+		if (!scriptureMatched) {
 			detectLyrics(combinedText, windowEndSec, false);
 		}
 	} else {
 		if (!detectLyrics(combinedText, windowEndSec, false)) {
-			detectScripture(combinedText, windowEndSec, false);
+			// Scripture fallback handled above
 		}
 	}
 
@@ -528,389 +619,51 @@ QString DetectionCore::normalizeSpokenText(QString s)
 	return s.simplified();
 }
 
+void DetectionCore::setPrimaryBible(const QString &abbrev)
+{
+	if (m_primaryBibleAbbrev != abbrev) {
+		m_primaryBibleAbbrev = abbrev;
+		m_bibleReloadNeeded.store(true, std::memory_order_release);
+	}
+}
+
+void DetectionCore::rebuildScriptureIndex()
+{
+	BiblePtr bible;
+	if (!m_primaryBibleAbbrev.isEmpty()) {
+		bible = BibleLibrary::instance().byAbbrev(m_primaryBibleAbbrev);
+	}
+	if (!bible) {
+		bible = BibleLibrary::instance().byAbbrev(QStringLiteral("KJV"));
+	}
+	if (!bible) {
+		auto all = BibleLibrary::instance().bibles();
+		if (!all.empty()) {
+			bible = all.front();
+		}
+	}
+
+	if (bible) {
+		m_scriptureVerses = buildVerseList(bible);
+		m_liveScripture = std::make_unique<ldsd::LiveScripture>(&m_scriptureVerses);
+	} else {
+		m_scriptureVerses.clear();
+		m_liveScripture = std::make_unique<ldsd::LiveScripture>(nullptr);
+	}
+}
+
 bool DetectionCore::detectScripture(const QString &rawTranscript, double streamTimeSec, bool isTentative)
 {
-	uint64_t wallNow = QDateTime::currentMSecsSinceEpoch();
-
-	// 20-second cooldown on re-suggesting the exact same reference
-	if (streamTimeSec > 0.0) {
-		if (streamTimeSec - m_lastSuggestionStreamTime < 2.0)
-			return false;
-	} else {
-		if (wallNow - m_lastSuggestionWallTime < 2000)
-			return false;
-	}
-
-	QString text = normalizeSpokenText(rawTranscript);
-	if (text.isEmpty())
-		return false;
-
-	// Phase 3: Context Memory for follow-on verses
-	// Check if context is active (< 300 seconds / 5 minutes old)
-	bool contextActive = false;
-	if (!m_contextBook.isEmpty() && m_contextChapter > 0) {
-		if (streamTimeSec > 0.0) {
-			contextActive = (streamTimeSec - m_contextStreamTime) <= 300.0;
-		} else {
-			contextActive = (wallNow - m_contextWallTimeMs) <= 300000;
-		}
-	}
-
-	if (contextActive) {
-		// Pattern A: "verse 29", "v 29", "verse 29 says"
-		QRegularExpression rxFollowVs(QStringLiteral("\\b(?:verse|v)\\s*(\\d+)(?:\\s*says)?\\b"));
-		QRegularExpressionMatch mVs = rxFollowVs.match(text);
-		if (mVs.hasMatch()) {
-			int vs = mVs.captured(1).toInt();
-			if (vs > 0 && vs != m_contextVerse) {
-				QString ref =
-					QStringLiteral("%1 %2:%3").arg(m_contextBook).arg(m_contextChapter).arg(vs);
-				if (ref != m_lastSuggestedRef || (streamTimeSec - m_lastSuggestionStreamTime > 20.0)) {
-					m_lastSuggestedRef = ref;
-					m_contextVerse = vs;
-					m_contextStreamTime = streamTimeSec;
-					m_contextWallTimeMs = wallNow;
-					m_lastSuggestionWallTime = wallNow;
-					m_lastSuggestionStreamTime = streamTimeSec;
-
-					SpeechSuggestion sugg;
-					sugg.channel = Channel::Scripture;
-					sugg.reference = ref;
-					sugg.text = QStringLiteral("Follow-on verse from context");
-					sugg.confidence = isTentative ? 80 : 95;
-					sugg.timestampSeconds = streamTimeSec;
-					sugg.tentative = isTentative;
-
-					if (m_debugLogging.load(std::memory_order_relaxed)) {
-						fprintf(stderr, "[LDWW Core] ==> CONTEXT FOLLOW-ON: %s (95%%)\n",
-							ref.toUtf8().constData());
-					}
-					emit suggestionDetected(sugg);
-					return true;
-				}
-			}
-		}
-
-		// Pattern B: "the next verse", "next verse"
-		if (text.contains(QStringLiteral("next verse")) || text.contains(QStringLiteral("the next verse"))) {
-			int nextVs = m_contextVerse + 1;
-			QString ref = QStringLiteral("%1 %2:%3").arg(m_contextBook).arg(m_contextChapter).arg(nextVs);
-			if (ref != m_lastSuggestedRef) {
-				m_lastSuggestedRef = ref;
-				m_contextVerse = nextVs;
-				m_contextStreamTime = streamTimeSec;
-				m_contextWallTimeMs = wallNow;
-				m_lastSuggestionWallTime = wallNow;
-				m_lastSuggestionStreamTime = streamTimeSec;
-
-				SpeechSuggestion sugg;
-				sugg.channel = Channel::Scripture;
-				sugg.reference = ref;
-				sugg.text = QStringLiteral("Next verse in passage");
-				sugg.confidence = 94;
-				sugg.timestampSeconds = streamTimeSec;
-				sugg.tentative = isTentative;
-				sugg.isNextSlide = true;
-
-				emit suggestionDetected(sugg);
-				return true;
-			}
-		}
-
-		// Pattern C: "chapter 9", "chapter nine"
-		QRegularExpression rxFollowCh(QStringLiteral("\\bchapter\\s*(\\d+)\\b"));
-		QRegularExpressionMatch mCh = rxFollowCh.match(text);
-		if (mCh.hasMatch()) {
-			int ch = mCh.captured(1).toInt();
-			if (ch > 0 && ch != m_contextChapter) {
-				QString ref = QStringLiteral("%1 %2:1").arg(m_contextBook).arg(ch);
-				if (ref != m_lastSuggestedRef) {
-					m_lastSuggestedRef = ref;
-					m_contextChapter = ch;
-					m_contextVerse = 1;
-					m_contextStreamTime = streamTimeSec;
-					m_contextWallTimeMs = wallNow;
-					m_lastSuggestionWallTime = wallNow;
-					m_lastSuggestionStreamTime = streamTimeSec;
-
-					SpeechSuggestion sugg;
-					sugg.channel = Channel::Scripture;
-					sugg.reference = ref;
-					sugg.text = QStringLiteral("Next chapter in book");
-					sugg.confidence = 92;
-					sugg.timestampSeconds = streamTimeSec;
-					sugg.tentative = isTentative;
-
-					emit suggestionDetected(sugg);
-					return true;
-				}
-			}
-		}
-	}
-
-	struct BookAlias {
-		const char *alias;
-		const char *canonical;
-	};
-
-	static const BookAlias kAliases[] = {{"1 thessalonians", "1 Thessalonians"},
-					     {"first thessalonians", "1 Thessalonians"},
-					     {"1st thessalonians", "1 Thessalonians"},
-					     {"2 thessalonians", "2 Thessalonians"},
-					     {"second thessalonians", "2 Thessalonians"},
-					     {"2nd thessalonians", "2 Thessalonians"},
-					     {"1 chronicles", "1 Chronicles"},
-					     {"first chronicles", "1 Chronicles"},
-					     {"1st chronicles", "1 Chronicles"},
-					     {"2 chronicles", "2 Chronicles"},
-					     {"second chronicles", "2 Chronicles"},
-					     {"2nd chronicles", "2 Chronicles"},
-					     {"1 corinthians", "1 Corinthians"},
-					     {"first corinthians", "1 Corinthians"},
-					     {"1st corinthians", "1 Corinthians"},
-					     {"2 corinthians", "2 Corinthians"},
-					     {"second corinthians", "2 Corinthians"},
-					     {"2nd corinthians", "2 Corinthians"},
-					     {"song of solomon", "Song of Solomon"},
-					     {"song of songs", "Song of Solomon"},
-					     {"canticles", "Song of Solomon"},
-					     {"1 timothy", "1 Timothy"},
-					     {"first timothy", "1 Timothy"},
-					     {"1st timothy", "1 Timothy"},
-					     {"2 timothy", "2 Timothy"},
-					     {"second timothy", "2 Timothy"},
-					     {"2nd timothy", "2 Timothy"},
-					     {"1 samuel", "1 Samuel"},
-					     {"first samuel", "1 Samuel"},
-					     {"1st samuel", "1 Samuel"},
-					     {"2 samuel", "2 Samuel"},
-					     {"second samuel", "2 Samuel"},
-					     {"2nd samuel", "2 Samuel"},
-					     {"1 kings", "1 Kings"},
-					     {"first kings", "1 Kings"},
-					     {"1st kings", "1 Kings"},
-					     {"2 kings", "2 Kings"},
-					     {"second kings", "2 Kings"},
-					     {"2nd kings", "2 Kings"},
-					     {"1 peter", "1 Peter"},
-					     {"first peter", "1 Peter"},
-					     {"1st peter", "1 Peter"},
-					     {"2 peter", "2 Peter"},
-					     {"second peter", "2 Peter"},
-					     {"2nd peter", "2 Peter"},
-					     {"1 john", "1 John"},
-					     {"first john", "1 John"},
-					     {"1st john", "1 John"},
-					     {"2 john", "2 John"},
-					     {"second john", "2 John"},
-					     {"2nd john", "2 John"},
-					     {"3 john", "3 John"},
-					     {"third john", "3 John"},
-					     {"3rd john", "3 John"},
-					     {"revelations", "Revelation"},
-					     {"revelation", "Revelation"},
-					     {"psalms", "Psalms"},
-					     {"psalm", "Psalms"},
-					     {"genesis", "Genesis"},
-					     {"exodus", "Exodus"},
-					     {"leviticus", "Leviticus"},
-					     {"numbers", "Numbers"},
-					     {"deuteronomy", "Deuteronomy"},
-					     {"joshua", "Joshua"},
-					     {"judges", "Judges"},
-					     {"ruth", "Ruth"},
-					     {"ezra", "Ezra"},
-					     {"nehemiah", "Nehemiah"},
-					     {"esther", "Esther"},
-					     {"job", "Job"},
-					     {"proverbs", "Proverbs"},
-					     {"ecclesiastes", "Ecclesiastes"},
-					     {"isaiah", "Isaiah"},
-					     {"jeremiah", "Jeremiah"},
-					     {"lamentations", "Lamentations"},
-					     {"ezekiel", "Ezekiel"},
-					     {"daniel", "Daniel"},
-					     {"hosea", "Hosea"},
-					     {"joel", "Joel"},
-					     {"amos", "Amos"},
-					     {"obadiah", "Obadiah"},
-					     {"jonah", "Jonah"},
-					     {"micah", "Micah"},
-					     {"nahum", "Nahum"},
-					     {"habakkuk", "Habakkuk"},
-					     {"zephaniah", "Zephaniah"},
-					     {"haggai", "Haggai"},
-					     {"zechariah", "Zechariah"},
-					     {"malachi", "Malachi"},
-					     {"matthew", "Matthew"},
-					     {"mark", "Mark"},
-					     {"luke", "Luke"},
-					     {"john", "John"},
-					     {"jon", "John"},
-					     {"acts", "Acts"},
-					     {"romans", "Romans"},
-					     {"roman", "Romans"},
-					     {"galatians", "Galatians"},
-					     {"ephesians", "Ephesians"},
-					     {"philippians", "Philippians"},
-					     {"phillipians", "Philippians"},
-					     {"colossians", "Colossians"},
-					     {"titus", "Titus"},
-					     {"philemon", "Philemon"},
-					     {"hebrews", "Hebrews"},
-					     {"james", "James"},
-					     {"jude", "Jude"}};
-
-	for (const auto &b : kAliases) {
-		// Pattern 1: Standard [Book] [Chapter] [Verse]
-		QRegularExpression rx(
-			QStringLiteral(
-				"\\b%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?(?:\\s*(?:[:,-]|and\\s+(?:verse|v)?|from\\s+(?:verse|v)?|starting\\s+(?:at\\s+)?(?:verse|v)?|at\\s+(?:verse|v)?|verse|verses|v)?\\s*(\\d+))?")
-				.arg(QRegularExpression::escape(QString::fromUtf8(b.alias))));
-
-		QRegularExpressionMatch m = rx.match(text);
-		if (m.hasMatch()) {
-			int ch = m.captured(1).toInt();
-			int vs = m.captured(2).toInt();
-			if (ch > 0) {
-				QString ref;
-				if (vs > 0) {
-					ref = QStringLiteral("%1 %2:%3").arg(b.canonical).arg(ch).arg(vs);
-				} else {
-					ref = QStringLiteral("%1 %2").arg(b.canonical).arg(ch);
-				}
-
-				if (ref != m_lastSuggestedRef || (streamTimeSec - m_lastSuggestionStreamTime > 20.0)) {
-					m_lastSuggestedRef = ref;
-					m_contextBook = QString::fromUtf8(b.canonical);
-					m_contextChapter = ch;
-					m_contextVerse = vs > 0 ? vs : 1;
-					m_contextStreamTime = streamTimeSec;
-					m_contextWallTimeMs = wallNow;
-					m_lastSuggestionWallTime = wallNow;
-					m_lastSuggestionStreamTime = streamTimeSec;
-
-					SpeechSuggestion sugg;
-					sugg.channel = Channel::Scripture;
-					sugg.reference = ref;
-					sugg.text = QStringLiteral("Detected from audio");
-					sugg.confidence = isTentative ? 80 : 95;
-					sugg.timestampSeconds = streamTimeSec;
-					sugg.tentative = isTentative;
-
-					if (m_debugLogging.load(std::memory_order_relaxed)) {
-						fprintf(stderr, "[LDWW Core] ==> SUGGEST SCRIPTURE: %s (%d%%)\n",
-							ref.toUtf8().constData(), sugg.confidence);
-					}
-					emit suggestionDetected(sugg);
-					return true;
-				}
-			}
-		}
-
-		// Pattern 2: Inverted order: Verse [V] of [Book] [Chapter]
-		QRegularExpression rxInv(
-			QStringLiteral(
-				"\\b(?:verse|verses|v)\\s*(\\d+)\\s*(?:of|in|from)\\s*%1\\b(?:\\s*(?:chapter|ch)?\\s*(\\d+))?")
-				.arg(QRegularExpression::escape(QString::fromUtf8(b.alias))));
-
-		QRegularExpressionMatch mInv = rxInv.match(text);
-		if (mInv.hasMatch()) {
-			int vs = mInv.captured(1).toInt();
-			int ch = mInv.captured(2).toInt();
-			if (ch > 0 && vs > 0) {
-				QString ref = QStringLiteral("%1 %2:%3").arg(b.canonical).arg(ch).arg(vs);
-				if (ref != m_lastSuggestedRef || (streamTimeSec - m_lastSuggestionStreamTime > 20.0)) {
-					m_lastSuggestedRef = ref;
-					m_contextBook = QString::fromUtf8(b.canonical);
-					m_contextChapter = ch;
-					m_contextVerse = vs;
-					m_contextStreamTime = streamTimeSec;
-					m_contextWallTimeMs = wallNow;
-					m_lastSuggestionWallTime = wallNow;
-					m_lastSuggestionStreamTime = streamTimeSec;
-
-					SpeechSuggestion sugg;
-					sugg.channel = Channel::Scripture;
-					sugg.reference = ref;
-					sugg.text = QStringLiteral("Detected from audio");
-					sugg.confidence = isTentative ? 80 : 95;
-					sugg.timestampSeconds = streamTimeSec;
-					sugg.tentative = isTentative;
-
-					emit suggestionDetected(sugg);
-					return true;
-				}
-			}
-		}
-	}
-
-	// Phase 3: Quote matching across Bible
-	if (detectBibleQuotes(text, streamTimeSec)) {
-		return true;
-	}
-
+	Q_UNUSED(rawTranscript);
+	Q_UNUSED(streamTimeSec);
+	Q_UNUSED(isTentative);
 	return false;
 }
 
 bool DetectionCore::detectBibleQuotes(const QString &normalizedText, double streamTimeSec)
 {
-	uint64_t wallNow = QDateTime::currentMSecsSinceEpoch();
-
-	static const struct {
-		const char *phrase;
-		const char *ref;
-		const char *verse;
-	} kQuotes[] = {
-		{"for god so loved the world", "John 3:16",
-		 "For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life."},
-		{"the lord is my shepherd", "Psalms 23:1", "The Lord is my shepherd; I shall not want."},
-		{"all things work together for good", "Romans 8:28",
-		 "And we know that all things work together for good to them that love God..."},
-		{"i can do all things through christ", "Philippians 4:13",
-		 "I can do all things through Christ which strengtheneth me."},
-		{"trust in the lord with all thine heart", "Proverbs 3:5",
-		 "Trust in the Lord with all thine heart; and lean not unto thine own understanding."},
-		{"in the beginning god created the heaven", "Genesis 1:1",
-		 "In the beginning God created the heaven and the earth."},
-		{"be strong and courageous", "Joshua 1:9",
-		 "Be strong and of a good courage; be not afraid, neither be thou dismayed."},
-		{"the joy of the lord is your strength", "Nehemiah 8:10", "The joy of the LORD is your strength."},
-		{"by his stripes we are healed", "Isaiah 53:5", "With his stripes we are healed."},
-		{"if god be for us who can be against us", "Romans 8:31", "If God be for us, who can be against us?"},
-		{"charity suffereth long and is kind", "1 Corinthians 13:4",
-		 "Charity suffereth long, and is kind; charity envieth not; charity vaunteth not itself, is not puffed up,"},
-		{"if any of you lack wisdom let him ask of god", "James 1:5",
-		 "If any of you lack wisdom, let him ask of God, that giveth to all men liberally, and upbraideth not; and it shall be given him."},
-		{"i will lift up mine eyes unto the hills", "Psalms 121:1",
-		 "I will lift up mine eyes unto the hills, from whence cometh my help."}};
-
-	for (const auto &q : kQuotes) {
-		if (normalizedText.contains(QString::fromUtf8(q.phrase))) {
-			QString ref = QString::fromUtf8(q.ref);
-			if (ref != m_lastSuggestedRef || (streamTimeSec - m_lastSuggestionStreamTime > 20.0)) {
-				m_lastSuggestedRef = ref;
-				m_lastSuggestionWallTime = wallNow;
-				m_lastSuggestionStreamTime = streamTimeSec;
-
-				SpeechSuggestion sugg;
-				sugg.channel = Channel::Scripture;
-				sugg.reference = ref;
-				sugg.text = QString::fromUtf8(q.verse);
-				sugg.confidence = 94;
-				sugg.timestampSeconds = streamTimeSec;
-				sugg.tentative = false;
-
-				if (m_debugLogging.load(std::memory_order_relaxed)) {
-					fprintf(stderr, "[LDWW Core] ==> SUGGEST QUOTE: %s (94%%)\n",
-						ref.toUtf8().constData());
-				}
-				emit suggestionDetected(sugg);
-				return true;
-			}
-		}
-	}
-
+	Q_UNUSED(normalizedText);
+	Q_UNUSED(streamTimeSec);
 	return false;
 }
 

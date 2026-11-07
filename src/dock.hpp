@@ -45,6 +45,7 @@ public slots:
 	void goLive();
 	void clearLive();
 	bool showQuery(const QString &query, bool fromList = false);
+	void openReference(int book, int chapter, int verse, int verseEnd = 0);
 
 private slots:
 	void runSearch();

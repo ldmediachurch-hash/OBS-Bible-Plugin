@@ -12,6 +12,7 @@ the Free Software Foundation; either version 2 of the License, or
 
 #include "display-state.hpp"
 #include "lyrics.hpp"
+#include "scripture/scripture_detect.hpp"
 
 #include <QDateTime>
 #include <QList>
@@ -68,6 +69,8 @@ public:
 	void setActiveSong(const QString &title, int currentSlideIndex, const QString &nextSongTitle = QString());
 	void clearActiveSong();
 
+	void setPrimaryBible(const QString &abbrev);
+
 	// Ingestion: Feed 16 kHz float PCM samples (mono)
 	void pushPcmSamples(const float *samples, size_t count, double streamTimestampSec = -1.0);
 
@@ -99,6 +102,12 @@ private:
 
 	void analyzeBuffer(const std::vector<float> &chunk, double windowEndSec);
 	QString transcribeChunk(const std::vector<float> &chunk);
+	void rebuildScriptureIndex();
+
+	std::unique_ptr<ldsd::LiveScripture> m_liveScripture;
+	std::vector<ldsd::Verse> m_scriptureVerses;
+	QString m_primaryBibleAbbrev;
+	std::atomic<bool> m_bibleReloadNeeded{true};
 
 	std::atomic<bool> m_modelLoaded{false};
 	std::atomic<Channel> m_channel{Channel::Scripture};

@@ -54,6 +54,8 @@ public:
 	void setChannelMode(Channel ch);
 	Channel channelMode() const;
 
+	void setPrimaryBible(const QString &abbrev) { m_core.setPrimaryBible(abbrev); }
+
 	DetectionCore &core() { return m_core; }
 
 	// Internal callback from OBS

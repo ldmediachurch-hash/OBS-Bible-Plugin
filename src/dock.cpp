@@ -471,6 +471,11 @@ void ScriptureDock::refreshTranslations(const QString &primaryAbbrev, const QStr
 
 	primaryBox->blockSignals(false);
 	secondaryBox->blockSignals(false);
+
+	auto b = primary();
+	if (b) {
+		AudioEngine::instance().setPrimaryBible(b->abbrev);
+	}
 }
 
 BiblePtr ScriptureDock::primary() const
@@ -490,6 +495,10 @@ void ScriptureDock::translationChanged()
 	updatePreview();
 	if (live)
 		pushToOutput();
+	auto b = primary();
+	if (b) {
+		AudioEngine::instance().setPrimaryBible(b->abbrev);
+	}
 }
 
 void ScriptureDock::runSearch()
@@ -541,6 +550,21 @@ bool ScriptureDock::showQuery(const QString &query, bool fromList)
 		results->setCurrentRow(0);
 	}
 	return true;
+}
+
+void ScriptureDock::openReference(int book, int chapter, int verse, int verseEnd)
+{
+	auto b = primary();
+	if (!b)
+		return;
+	searchIsKeyword = false;
+	setChapter(book, chapter, verse > 0 ? verse : 1);
+	if (verseEnd > verse) {
+		rangeEnd = verseEnd;
+	} else {
+		rangeEnd = 0;
+	}
+	updatePreview();
 }
 
 void ScriptureDock::setChapter(int book, int chapter, int selectVerse)
