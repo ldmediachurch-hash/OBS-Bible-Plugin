@@ -103,6 +103,7 @@ signals:
 	void modelLoadedChanged(bool loaded, const QString &statusText);
 	void stageTimed(const QString &stage, double ms);
 	void autoAdvanceRequested();
+	void backlogWarningChanged(bool fallingBehind, double backlogSec);
 
 private:
 	void startWorker();
@@ -140,6 +141,7 @@ private:
 	std::atomic<double> m_streamTimeSec{0.0};
 
 	std::atomic<bool> m_workerRunning{false};
+	std::atomic<bool> m_fallingBehind{false};
 	std::unique_ptr<std::thread> m_workerThread;
 
 	// LocalAgreement-2 Streaming state
@@ -150,6 +152,7 @@ private:
 	double m_lastCommittedSentenceEndSec = -1.0;
 	std::vector<TimedWord> m_prevPassWords;
 	std::string m_committedHistory;
+	double m_lastWhisperMs = 0.0;
 
 	// Context memory for follow-on verses (e.g. "verse 29", "the next verse", "chapter 9")
 	QString m_contextBook;

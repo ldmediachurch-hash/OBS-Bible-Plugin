@@ -202,6 +202,38 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 
 	root->addWidget(m_suggestionCard);
 
+	// Backlog Warning Guard Bar
+	m_backlogBar = new QWidget(this);
+	m_backlogBar->setStyleSheet(QStringLiteral(
+		"background-color: rgba(220, 38, 38, 0.2); border: 1px solid rgba(220, 38, 38, 0.6); "
+		"border-radius: 6px; padding: 4px 8px; margin: 2px 0px;"));
+	auto *blLayout = new QHBoxLayout(m_backlogBar);
+	blLayout->setContentsMargins(6, 2, 6, 2);
+	blLayout->setSpacing(8);
+
+	m_backlogLabel = new QLabel(QStringLiteral("⚠️ Falling behind (> 3s backlog)"), m_backlogBar);
+	m_backlogLabel->setStyleSheet(QStringLiteral("color: #FCA5A5; font-size: 11px; font-weight: bold;"));
+	blLayout->addWidget(m_backlogLabel, 1);
+
+	auto *switchBtn = new QPushButton(QStringLiteral("Switch model"), m_backlogBar);
+	switchBtn->setStyleSheet(QStringLiteral(
+		"QPushButton { background-color: #DC2626; color: #FFF; border: none; border-radius: 4px; "
+		"padding: 2px 8px; font-size: 10px; font-weight: bold; } "
+		"QPushButton:hover { background-color: #EF4444; }"));
+	connect(switchBtn, &QPushButton::clicked, this, &WorshipWordDock::switchToFasterModel);
+	blLayout->addWidget(switchBtn);
+
+	auto *blDismiss = new QToolButton(m_backlogBar);
+	blDismiss->setText(QStringLiteral("✕"));
+	blDismiss->setStyleSheet(QStringLiteral("color: #FCA5A5; border: none; background: transparent; font-size: 11px;"));
+	connect(blDismiss, &QToolButton::clicked, this, [this]() {
+		m_backlogBar->setVisible(false);
+	});
+	blLayout->addWidget(blDismiss);
+
+	m_backlogBar->setVisible(false);
+	root->addWidget(m_backlogBar);
+
 	// 4. Main Stacked Widget (Worship Page & Word Page)
 	m_stack = new QStackedWidget(this);
 
@@ -246,6 +278,13 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 			m_transcriptView->clear();
 	});
 	transHeader->addWidget(clearBtn);
+
+	auto *saveLogBtn = new QPushButton(QStringLiteral("Save log…"), m_transcriptContainer);
+	saveLogBtn->setStyleSheet(QStringLiteral(
+		"QPushButton { background: rgba(255,255,255,0.06); color: #8C93A0; border: none; border-radius: 3px; "
+		"padding: 1px 8px; font-size: 10px; } QPushButton:hover { background: rgba(255,255,255,0.12); color: #FFF; }"));
+	connect(saveLogBtn, &QPushButton::clicked, this, &WorshipWordDock::saveTranscriptLog);
+	transHeader->addWidget(saveLogBtn);
 	transLayout->addLayout(transHeader);
 
 	m_transcriptView = new QPlainTextEdit(m_transcriptContainer);
@@ -280,6 +319,8 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 		[this](bool, const QString &) { updateAudioStatusPill(); });
 	connect(&AudioEngine::instance(), &AudioEngine::modelDownloadProgress, this,
 		[this](int) { updateAudioStatusPill(); });
+	connect(&AudioEngine::instance().core(), &DetectionCore::backlogWarningChanged, this,
+		&WorshipWordDock::onBacklogWarning);
 
 	refreshAudioSources();
 	updateTabStyles();
@@ -418,12 +459,12 @@ void WorshipWordDock::testWithAudioFile()
 	}
 
 	if (m_transcriptView) {
-		m_transcriptView->appendPlainText(QStringLiteral("=== Starting Audio File Test: %1 ===").arg(QFileInfo(path).fileName()));
+		m_transcriptView->appendPlainText(QStringLiteral("=== Starting Audio File Test (Real-Time): %1 ===").arg(QFileInfo(path).fileName()));
 		m_transcriptView->ensureCursorVisible();
 	}
 
 	std::thread([path]() {
-		AudioEngine::instance().runAudioFileTest(path);
+		AudioEngine::instance().runAudioFileTest(path, true);
 	}).detach();
 }
 
@@ -647,4 +688,58 @@ void WorshipWordDock::saveConfig()
 	QJsonObject obj;
 	obj[QStringLiteral("model")] = AudioEngine::instance().currentModelChoice();
 	file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+}
+
+void WorshipWordDock::saveTranscriptLog()
+{
+	if (!m_transcriptView)
+		return;
+	QString defaultName = QStringLiteral("ld-transcript-log-%1.txt")
+		.arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss")));
+	QString path = QFileDialog::getSaveFileName(
+		this, QStringLiteral("Save Transcript Log"),
+		defaultName,
+		QStringLiteral("Text Files (*.txt);;All Files (*.*)"));
+	if (path.isEmpty())
+		return;
+	QFile f(path);
+	if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		QTextStream out(&f);
+		out << m_transcriptView->toPlainText();
+		f.close();
+	}
+}
+
+void WorshipWordDock::onBacklogWarning(bool fallingBehind, double backlogSec)
+{
+	if (m_backlogBar) {
+		m_backlogBar->setVisible(fallingBehind);
+		if (fallingBehind && m_backlogLabel) {
+			m_backlogLabel->setText(QStringLiteral("⚠️ Falling behind (%1s backlog)")
+						.arg(QString::number(backlogSec, 'f', 1)));
+		}
+	}
+	if (m_statusPill) {
+		if (fallingBehind) {
+			m_statusPill->setText(QStringLiteral("Falling behind"));
+			m_statusPill->setStyleSheet(QStringLiteral(
+				"QPushButton { background: #DC2626; color: #FFF; border: none; "
+				"border-radius: 10px; padding: 2px 8px; font-size: 10px; font-weight: bold; }"));
+		} else {
+			updateAudioStatusPill();
+		}
+	}
+}
+
+void WorshipWordDock::switchToFasterModel()
+{
+	QString current = AudioEngine::instance().currentModelChoice();
+	if (current.contains(QStringLiteral("large"))) {
+		AudioEngine::instance().setModelChoice(QStringLiteral("small.en-q5_1"));
+	} else {
+		AudioEngine::instance().setModelChoice(QStringLiteral("base.en"));
+	}
+	saveConfig();
+	if (m_backlogBar)
+		m_backlogBar->setVisible(false);
 }

@@ -8,6 +8,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 #include <algorithm>
 
@@ -36,8 +37,14 @@ static bool isSentenceEnd(const std::string &w)
 {
 	if (w.empty())
 		return false;
-	char last = w.back();
-	return (last == '.' || last == '?' || last == '!' || last == ';');
+	for (auto it = w.rbegin(); it != w.rend(); ++it) {
+		char c = *it;
+		if (c == '.' || c == '?' || c == '!' || c == ';' || c == ',')
+			return true;
+		if (std::isalnum(static_cast<unsigned char>(c)))
+			break;
+	}
+	return false;
 }
 
 static bool isStockSilence(const std::string &text)
@@ -341,9 +348,21 @@ struct DetectedReference {
 
 int main(int argc, char **argv)
 {
-	std::string modelPath = (argc > 1) ? argv[1] : "";
-	std::string audioPath = (argc > 2) ? argv[2] : "test-audio/pewbeam_demo_16k.wav";
-	std::string tsvPath = (argc > 3) ? argv[3] : "tests/kjv.tsv";
+	std::vector<std::string> posArgs;
+	bool isRealtime = false;
+
+	for (int i = 1; i < argc; ++i) {
+		std::string arg = argv[i];
+		if (arg == "--realtime" || arg == "-r") {
+			isRealtime = true;
+		} else {
+			posArgs.push_back(arg);
+		}
+	}
+
+	std::string modelPath = (posArgs.size() > 0) ? posArgs[0] : "";
+	std::string audioPath = (posArgs.size() > 1) ? posArgs[1] : "test-audio/pewbeam_demo_16k.wav";
+	std::string tsvPath = (posArgs.size() > 2) ? posArgs[2] : "tests/kjv.tsv";
 
 	if (modelPath.empty()) {
 		const char *home = std::getenv("HOME");
@@ -356,12 +375,12 @@ int main(int argc, char **argv)
 	}
 
 	if (modelPath.empty()) {
-		std::cerr << "Usage: " << argv[0] << " <model_path> [audio_wav_path] [kjv_tsv_path]\n";
+		std::cerr << "Usage: " << argv[0] << " <model_path> [audio_wav_path] [kjv_tsv_path] [--realtime]\n";
 		return 1;
 	}
 
 	std::cout << "=========================================================\n";
-	std::cout << "LD Worship & Word: Audio Pipeline Test (LocalAgreement-2)\n";
+	std::cout << "LD Worship & Word: Audio Pipeline Test (" << (isRealtime ? "REAL-TIME" : "BATCH") << ")\n";
 	std::cout << "Model: " << modelPath << "\n";
 	std::cout << "Audio: " << audioPath << "\n";
 	std::cout << "TSV:   " << tsvPath << "\n";
@@ -403,8 +422,12 @@ int main(int argc, char **argv)
 	double duration = static_cast<double>(audio.size()) / 16000.0;
 	std::cout << "Loaded WAV: " << audio.size() << " samples (" << duration << "s)\n";
 
-	// 3. Init Whisper
+	// 3. Init Whisper with GPU + Flash Attention on Apple
 	whisper_context_params cparams = whisper_context_default_params();
+#ifdef __APPLE__
+	cparams.use_gpu = true;
+	cparams.flash_attn = true;
+#endif
 	whisper_context *ctx = whisper_init_from_file_with_params(modelPath.c_str(), cparams);
 	if (!ctx) {
 		std::cerr << "Error: Failed to initialize Whisper from: " << modelPath << "\n";
@@ -418,17 +441,42 @@ int main(int argc, char **argv)
 	double lastCommittedSentenceEndSec = -1.0;
 	std::vector<TimedWord> prevPassWords;
 	std::string committedHistory;
-	std::vector<DetectedReference> allDetections;
+
+	struct DetectionRecord {
+		std::string label;
+		int confidence;
+		std::string status;
+		std::string kind;
+		double streamTimeSec;
+		double wallTimeSec;
+	};
+	std::vector<DetectionRecord> allDetections;
 
 	constexpr size_t kChunkSize = 16000; // 1.0s hop
 	double streamNow = 0.0;
 
-	auto startTime = std::chrono::steady_clock::now();
+	auto pipelineStartTime = std::chrono::steady_clock::now();
+	auto wallStartTime = pipelineStartTime;
+
+	int passCount = 0;
+	double totalPassTimeMs = 0.0;
+	double maxPassTimeMs = 0.0;
+	double maxBacklogSec = 0.0;
+	int lastReported10s = 0;
 
 	for (size_t pos = 0; pos < audio.size(); pos += kChunkSize) {
 		size_t n = std::min(kChunkSize, audio.size() - pos);
 		std::vector<float> chunk(audio.begin() + pos, audio.begin() + pos + n);
 		streamNow += static_cast<double>(n) / 16000.0;
+
+		// In Real-Time mode, wait until wall-clock reaches stream arrival time
+		if (isRealtime) {
+			auto now = std::chrono::steady_clock::now();
+			double wallElapsed = std::chrono::duration<double>(now - wallStartTime).count();
+			if (wallElapsed < streamNow) {
+				std::this_thread::sleep_for(std::chrono::duration<double>(streamNow - wallElapsed));
+			}
+		}
 
 		if (streamBuffer.empty()) {
 			bufStartSec = std::max(0.0, streamNow - (static_cast<double>(chunk.size()) / 16000.0));
@@ -438,7 +486,11 @@ int main(int argc, char **argv)
 		if (streamBuffer.size() < static_cast<size_t>(2.5 * 16000))
 			continue;
 
+		passCount++;
+		auto tPassStart = std::chrono::steady_clock::now();
+
 		// VAD: Speech presence check
+		auto tVadStart = std::chrono::steady_clock::now();
 		float maxRms = 0.0f;
 		constexpr size_t subSize = 3200;
 		for (size_t i = 0; i + subSize <= streamBuffer.size(); i += subSize) {
@@ -451,8 +503,18 @@ int main(int argc, char **argv)
 			if (subRms > maxRms)
 				maxRms = subRms;
 		}
-		if (maxRms < 0.002f)
+		auto tVadEnd = std::chrono::steady_clock::now();
+		double vadMs = std::chrono::duration<double, std::milli>(tVadEnd - tVadStart).count();
+
+		if (maxRms < 0.002f) {
+			auto tPassEnd = std::chrono::steady_clock::now();
+			double passMs = std::chrono::duration<double, std::milli>(tPassEnd - tPassStart).count();
+			totalPassTimeMs += passMs;
+			maxPassTimeMs = std::max(maxPassTimeMs, passMs);
+			printf("[pass %2d: buf=%4.1fs, total=%5.1fms (vad=%4.1fms, whisper=0.0ms [silent], other=0.0ms)]\n",
+			       passCount, static_cast<double>(streamBuffer.size()) / 16000.0, passMs, vadMs);
 			continue;
+		}
 
 		// Buffer cap 15s
 		constexpr size_t kMaxBufferSamples = 15 * 16000;
@@ -464,6 +526,7 @@ int main(int argc, char **argv)
 
 		double bufStart = bufStartSec;
 		std::vector<float> audioCopy = streamBuffer;
+		double bufferSeconds = static_cast<double>(audioCopy.size()) / 16000.0;
 
 		// 80Hz high-pass and AGC
 		applyHighPass80Hz(audioCopy, 16000.0f);
@@ -472,6 +535,9 @@ int main(int argc, char **argv)
 		// Whisper params
 		whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
 		wparams.strategy = WHISPER_SAMPLING_GREEDY;
+		wparams.temperature = 0.0f;
+		wparams.temperature_inc = 0.0f;
+		wparams.max_tokens = 64;
 		wparams.token_timestamps = true;
 		wparams.no_timestamps = false;
 		wparams.single_segment = false;
@@ -484,7 +550,12 @@ int main(int argc, char **argv)
 		wparams.language = "en";
 		wparams.translate = false;
 		wparams.no_context = true;
-		wparams.n_threads = 4;
+		wparams.n_threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 2, 8);
+
+		// Size audio_ctx to the buffer (~buffer_seconds/30*1500, multiple of 64, min 384, max 1500)
+		int targetCtx = static_cast<int>(std::ceil((bufferSeconds / 30.0) * 1500.0));
+		targetCtx = ((targetCtx + 63) / 64) * 64;
+		wparams.audio_ctx = std::clamp(targetCtx, 384, 1500);
 
 		std::string prompt = "A sermon. The preacher reads from the Bible.";
 		if (!committedHistory.empty()) {
@@ -493,8 +564,18 @@ int main(int argc, char **argv)
 		}
 		wparams.initial_prompt = prompt.c_str();
 
-		if (whisper_full(ctx, wparams, audioCopy.data(), static_cast<int>(audioCopy.size())) != 0)
+		auto tWhisperStart = std::chrono::steady_clock::now();
+		int ret = whisper_full(ctx, wparams, audioCopy.data(), static_cast<int>(audioCopy.size()));
+		auto tWhisperEnd = std::chrono::steady_clock::now();
+		double whisperMs = std::chrono::duration<double, std::milli>(tWhisperEnd - tWhisperStart).count();
+
+		if (ret != 0) {
+			auto tPassEnd = std::chrono::steady_clock::now();
+			double passMs = std::chrono::duration<double, std::milli>(tPassEnd - tPassStart).count();
+			totalPassTimeMs += passMs;
+			maxPassTimeMs = std::max(maxPassTimeMs, passMs);
 			continue;
+		}
 
 		// Extract words with token timestamps
 		std::vector<TimedWord> words;
@@ -563,6 +644,7 @@ int main(int argc, char **argv)
 		}
 
 		int64_t nowMs = static_cast<int64_t>(streamNow * 1000.0);
+		double nowWallSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - wallStartTime).count();
 
 		// 1. Committed words
 		if (prefixLen > 0) {
@@ -587,7 +669,7 @@ int main(int argc, char **argv)
 				int conf = static_cast<int>(std::round(r.confidence * 100.0));
 				printf("[%5.1fs]   >>> DETECTED: %s (status=%s, kind=%s, conf=%d%%)\n",
 				       streamNow, r.label.c_str(), r.status.c_str(), r.kind.c_str(), conf);
-				allDetections.push_back({r.label, conf, r.status, r.kind, streamNow});
+				allDetections.push_back({r.label, conf, r.status, r.kind, streamNow, nowWallSec});
 			}
 		}
 
@@ -605,7 +687,7 @@ int main(int argc, char **argv)
 				int conf = static_cast<int>(std::round(r.confidence * 100.0));
 				printf("[%5.1fs]   (tentative: %s, %s, conf=%d%%)\n",
 				       streamNow, r.label.c_str(), r.kind.c_str(), conf);
-				allDetections.push_back({r.label, conf, r.status, r.kind, streamNow});
+				allDetections.push_back({r.label, conf, r.status, r.kind, streamNow, nowWallSec});
 			}
 
 			prevPassWords = std::vector<TimedWord>(uncommitted.begin() + prefixLen, uncommitted.end());
@@ -615,22 +697,66 @@ int main(int argc, char **argv)
 
 		// 3. Trim buffer at committed sentence end
 		double bufDur = static_cast<double>(streamBuffer.size()) / 16000.0;
-		if (bufDur > 8.0 && lastCommittedSentenceEndSec > bufStartSec) {
+		if (bufDur > 6.0 && lastCommittedSentenceEndSec > bufStartSec) {
 			double trimSec = lastCommittedSentenceEndSec - bufStartSec;
 			size_t drop = std::min(streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
 			if (drop > 0) {
 				streamBuffer.erase(streamBuffer.begin(), streamBuffer.begin() + drop);
 				bufStartSec += static_cast<double>(drop) / 16000.0;
 			}
+		} else if (bufDur > 10.0 && lastCommittedTimeSec > bufStartSec + 4.0) {
+			double trimSec = lastCommittedTimeSec - bufStartSec;
+			size_t drop = std::min(streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
+			if (drop > 0) {
+				streamBuffer.erase(streamBuffer.begin(), streamBuffer.begin() + drop);
+				bufStartSec += static_cast<double>(drop) / 16000.0;
+			}
+		}
+
+		auto tPassEnd = std::chrono::steady_clock::now();
+		double passMs = std::chrono::duration<double, std::milli>(tPassEnd - tPassStart).count();
+		totalPassTimeMs += passMs;
+		maxPassTimeMs = std::max(maxPassTimeMs, passMs);
+		double otherMs = std::max(0.0, passMs - vadMs - whisperMs);
+
+		printf("[pass %2d: buf=%4.1fs, total=%5.1fms (vad=%4.1fms, whisper=%5.1fms, other=%4.1fms)]\n",
+		       passCount, bufferSeconds, passMs, vadMs, whisperMs, otherMs);
+
+		// Backlog tracking
+		if (isRealtime) {
+			auto nowWall = std::chrono::steady_clock::now();
+			double wallElapsed = std::chrono::duration<double>(nowWall - wallStartTime).count();
+			double curBacklog = std::max(0.0, wallElapsed - streamNow);
+			if (curBacklog > maxBacklogSec)
+				maxBacklogSec = curBacklog;
+
+			int check10 = static_cast<int>(streamNow / 10.0);
+			if (check10 > lastReported10s && check10 <= 5) {
+				lastReported10s = check10;
+				printf("  [BACKLOG @ %ds]: %4.2fs (max so far: %4.2fs)\n",
+				       check10 * 10, curBacklog, maxBacklogSec);
+			}
 		}
 	}
 
 	whisper_free(ctx);
 
-	auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::steady_clock::now() - startTime).count();
-	std::cout << "\nTest processed " << duration << "s audio in " << (elapsedMs / 1000.0)
-		  << "s (" << (duration / (elapsedMs / 1000.0)) << "x real-time speed).\n";
+	double realTimeFactor = (totalPassTimeMs / 1000.0) / duration;
+	double avgPassMs = passCount > 0 ? (totalPassTimeMs / passCount) : 0.0;
+
+	std::cout << "\n---------------------------------------------------------\n";
+	std::cout << "Timing Summary:\n";
+	std::cout << "  Audio duration:       " << duration << " s\n";
+	std::cout << "  Total processing:     " << (totalPassTimeMs / 1000.0) << " s\n";
+	std::cout << "  Real-time factor:     " << realTimeFactor << "x ("
+		  << (realTimeFactor < 1.0 ? "FASTER than real-time" : "SLOWER than real-time") << ")\n";
+	std::cout << "  Pass count:           " << passCount << "\n";
+	std::cout << "  Average ms per pass:  " << avgPassMs << " ms\n";
+	std::cout << "  Maximum ms per pass:  " << maxPassTimeMs << " ms\n";
+	if (isRealtime) {
+		std::cout << "  Maximum backlog:      " << maxBacklogSec << " s\n";
+	}
+	std::cout << "---------------------------------------------------------\n";
 
 	// Verification against expected results:
 	//   1.6 s   Psalms 27:1
@@ -643,7 +769,8 @@ int main(int argc, char **argv)
 		std::string label;
 		double spokenTimeSec;
 		bool detected = false;
-		double detectedTimeSec = 0.0;
+		double detectedStreamSec = 0.0;
+		double detectedWallSec = 0.0;
 		std::string detectedStatus;
 		int confidence = 0;
 	};
@@ -662,7 +789,8 @@ int main(int argc, char **argv)
 			if (d.label == exp.label) {
 				if (!exp.detected || (exp.detectedStatus == "preview" && d.status != "preview")) {
 					exp.detected = true;
-					exp.detectedTimeSec = d.timestampSec;
+					exp.detectedStreamSec = d.streamTimeSec;
+					exp.detectedWallSec = d.wallTimeSec;
 					exp.detectedStatus = d.status;
 					exp.confidence = d.confidence;
 				}
@@ -685,17 +813,19 @@ int main(int argc, char **argv)
 		}
 	}
 
-	std::cout << "\n=================== RESULTS ===================\n";
+	std::cout << "\n=================== VERSE DETECTION RESULTS ===================\n";
 	bool allPassed = true;
 	for (const auto &exp : expected) {
 		if (exp.detected) {
-			double diff = std::abs(exp.detectedTimeSec - exp.spokenTimeSec);
-			std::cout << "  [PASS] " << exp.label << " detected at " << exp.detectedTimeSec
-				  << "s (status=" << exp.detectedStatus << ", conf=" << exp.confidence << "%, spoken at "
-				  << exp.spokenTimeSec << "s, diff=" << diff << "s)\n";
-			if (diff > 4.0) {
-				std::cout << "         Note: detected within streaming buffer window\n";
-			}
+			double delay = isRealtime ? (exp.detectedWallSec - exp.spokenTimeSec)
+						  : (exp.detectedStreamSec - exp.spokenTimeSec);
+			bool isLate = delay > 2.0;
+			std::cout << "  [" << (isLate ? "LATE" : "PASS") << "] " << exp.label
+				  << " | spoken: " << exp.spokenTimeSec << "s"
+				  << " | detected: " << (isRealtime ? exp.detectedWallSec : exp.detectedStreamSec) << "s"
+				  << " | delay: " << delay << "s (" << (isLate ? "LATE (> 2s)" : "ON TIME") << ")"
+				  << " | status: " << exp.detectedStatus
+				  << " | conf: " << exp.confidence << "%\n";
 		} else {
 			std::cout << "  [FAIL] " << exp.label << " (spoken at " << exp.spokenTimeSec << "s) was NOT detected!\n";
 			allPassed = false;
@@ -711,7 +841,7 @@ int main(int argc, char **argv)
 	} else {
 		std::cout << "  [PASS] No unexpected confirmed references.\n";
 	}
-	std::cout << "===============================================\n";
+	std::cout << "===============================================================\n";
 
 	return allPassed ? 0 : 1;
 }

@@ -64,6 +64,9 @@ private slots:
 	void dismissSuggestion();
 	void openAudioStatusMenu();
 	void testWithAudioFile();
+	void saveTranscriptLog();
+	void onBacklogWarning(bool fallingBehind, double backlogSec);
+	void switchToFasterModel();
 	void onRawTranscriptPass(const QString &text, double timestampSec);
 	void onScriptureDetected(const QString &label, int confidence, const QString &status, const QString &kind,
 				 double timestampSec);
@@ -111,6 +114,10 @@ private:
 	ldsd::Ref m_currentScriptureRef;
 	QTimer *m_suggestionTimer = nullptr;
 	static inline WorshipWordDock *s_instance = nullptr;
+
+	// Backlog guard warning bar
+	QWidget *m_backlogBar = nullptr;
+	QLabel *m_backlogLabel = nullptr;
 
 	// Transcript debug panel
 	QPushButton *m_transcriptToggleBtn = nullptr;

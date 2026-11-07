@@ -48,8 +48,14 @@ static bool isSentenceEndWord(const std::string &w)
 {
 	if (w.empty())
 		return false;
-	char last = w.back();
-	return (last == '.' || last == '?' || last == '!' || last == ';');
+	for (auto it = w.rbegin(); it != w.rend(); ++it) {
+		char c = *it;
+		if (c == '.' || c == '?' || c == '!' || c == ';' || c == ',')
+			return true;
+		if (std::isalnum(static_cast<unsigned char>(c)))
+			break;
+	}
+	return false;
 }
 
 static bool isStockSilenceOutput(const std::string &segText)
@@ -390,6 +396,10 @@ bool DetectionCore::loadModel(const QString &path)
 	}
 
 	whisper_context_params cparams = whisper_context_default_params();
+#ifdef __APPLE__
+	cparams.use_gpu = true;
+	cparams.flash_attn = true;
+#endif
 	m_whisperCtx = whisper_init_from_file_with_params(path.toUtf8().constData(), cparams);
 
 	if (m_whisperCtx) {
@@ -598,6 +608,29 @@ void DetectionCore::workerLoop()
 		if (curSize - m_lastProcessedSamples < static_cast<size_t>(1.0 * 16000))
 			continue;
 
+		// Backlog guard: check if audio processing is falling > 3s behind real-time
+		double streamNow = m_streamTimeSec.load(std::memory_order_relaxed);
+		double processedUpTo = m_bufStartSec + (static_cast<double>(curSize) / 16000.0);
+		double backlog = std::max(0.0, streamNow - processedUpTo);
+
+		if (backlog > 3.0) {
+			if (!m_fallingBehind.load(std::memory_order_relaxed)) {
+				m_fallingBehind.store(true, std::memory_order_relaxed);
+				emit backlogWarningChanged(true, backlog);
+			}
+			// Skip passes: keep only latest 2.5s to immediately catch up
+			constexpr size_t kKeepSamples = static_cast<size_t>(2.5 * 16000);
+			if (m_streamBuffer.size() > kKeepSamples) {
+				size_t drop = m_streamBuffer.size() - kKeepSamples;
+				m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
+				m_bufStartSec += static_cast<double>(drop) / 16000.0;
+				m_lastProcessedSamples = m_streamBuffer.size();
+			}
+		} else if (backlog < 1.5 && m_fallingBehind.load(std::memory_order_relaxed)) {
+			m_fallingBehind.store(false, std::memory_order_relaxed);
+			emit backlogWarningChanged(false, backlog);
+		}
+
 		runStreamingPass();
 	}
 }
@@ -624,7 +657,10 @@ void DetectionCore::runStreamingPass()
 	if (m_streamBuffer.size() < static_cast<size_t>(2.5 * 16000))
 		return;
 
+	auto tPassStart = std::chrono::steady_clock::now();
+
 	// Step 10: Don't run whisper on segments with no speech
+	auto tVadStart = std::chrono::steady_clock::now();
 	float maxRms = 0.0f;
 	constexpr size_t subSize = 3200; // 200ms @ 16kHz
 	for (size_t i = 0; i + subSize <= m_streamBuffer.size(); i += subSize) {
@@ -637,6 +673,9 @@ void DetectionCore::runStreamingPass()
 		if (subRms > maxRms)
 			maxRms = subRms;
 	}
+	auto tVadEnd = std::chrono::steady_clock::now();
+	double vadMs = std::chrono::duration<double, std::milli>(tVadEnd - tVadStart).count();
+
 	if (maxRms < 0.002f) {
 		return;
 	}
@@ -773,10 +812,17 @@ void DetectionCore::runStreamingPass()
 		m_prevPassWords.clear();
 	}
 
-	// 3. Move buf_start forward only to the end of a committed sentence, and only when buffer > 8s
+	// 3. Move buf_start forward to the end of a committed clause/sentence, and only when buffer > 6s
 	double bufDurationSec = static_cast<double>(m_streamBuffer.size()) / 16000.0;
-	if (bufDurationSec > 8.0 && m_lastCommittedSentenceEndSec > m_bufStartSec) {
+	if (bufDurationSec > 6.0 && m_lastCommittedSentenceEndSec > m_bufStartSec) {
 		double trimSec = m_lastCommittedSentenceEndSec - m_bufStartSec;
+		size_t drop = std::min(m_streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
+		if (drop > 0) {
+			m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
+			m_bufStartSec += static_cast<double>(drop) / 16000.0;
+		}
+	} else if (bufDurationSec > 10.0 && m_lastCommittedTimeSec > m_bufStartSec + 4.0) {
+		double trimSec = m_lastCommittedTimeSec - m_bufStartSec;
 		size_t drop = std::min(m_streamBuffer.size(), static_cast<size_t>(trimSec * 16000.0));
 		if (drop > 0) {
 			m_streamBuffer.erase(m_streamBuffer.begin(), m_streamBuffer.begin() + drop);
@@ -785,6 +831,19 @@ void DetectionCore::runStreamingPass()
 	}
 
 	m_lastProcessedSamples = m_streamBuffer.size();
+
+	auto tPassEnd = std::chrono::steady_clock::now();
+	double passMs = std::chrono::duration<double, std::milli>(tPassEnd - tPassStart).count();
+	double otherMs = std::max(0.0, passMs - vadMs - m_lastWhisperMs);
+	double bufDurSec = static_cast<double>(audioCopy.size()) / 16000.0;
+
+	QString passLog = QStringLiteral("[pass: buf=%1s, total=%2ms (vad=%3ms, whisper=%4ms, other=%5ms)]")
+				  .arg(QString::number(bufDurSec, 'f', 1))
+				  .arg(QString::number(passMs, 'f', 1))
+				  .arg(QString::number(vadMs, 'f', 1))
+				  .arg(QString::number(m_lastWhisperMs, 'f', 1))
+				  .arg(QString::number(otherMs, 'f', 1));
+	emit rawTranscriptPass(passLog, bufStart + bufDurSec);
 }
 
 std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &audio, double bufStartSec)
@@ -796,7 +855,9 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 
 	whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
 	wparams.strategy = WHISPER_SAMPLING_GREEDY;
+	wparams.temperature = 0.0f;
 	wparams.temperature_inc = 0.0f;
+	wparams.max_tokens = 64;
 	wparams.no_timestamps = false;
 	wparams.token_timestamps = true;
 	wparams.single_segment = false;
@@ -809,8 +870,13 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 	wparams.language = "en";
 	wparams.translate = false;
 	wparams.no_context = true;
-	wparams.n_threads = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
-	wparams.audio_ctx = 0;
+	wparams.n_threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 2, 8);
+
+	// Size audio_ctx to the buffer (~buffer_seconds/30*1500, multiple of 64, min 384, max 1500)
+	double bufferSeconds = static_cast<double>(audio.size()) / 16000.0;
+	int targetCtx = static_cast<int>(std::ceil((bufferSeconds / 30.0) * 1500.0));
+	targetCtx = ((targetCtx + 63) / 64) * 64;
+	wparams.audio_ctx = std::clamp(targetCtx, 384, 1500);
 
 	// Step 10: Silero VAD (built into whisper.cpp 1.7.6+)
 	char *vadCfg = obs_module_config_path("models/ggml-silero-v5.1.2.bin");
@@ -832,7 +898,12 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 	}
 	wparams.initial_prompt = prompt.c_str();
 
-	if (whisper_full(m_whisperCtx, wparams, audio.data(), static_cast<int>(audio.size())) != 0) {
+	auto tWhisperStart = std::chrono::steady_clock::now();
+	int ret = whisper_full(m_whisperCtx, wparams, audio.data(), static_cast<int>(audio.size()));
+	auto tWhisperEnd = std::chrono::steady_clock::now();
+	m_lastWhisperMs = std::chrono::duration<double, std::milli>(tWhisperEnd - tWhisperStart).count();
+
+	if (ret != 0) {
 		return words;
 	}
 

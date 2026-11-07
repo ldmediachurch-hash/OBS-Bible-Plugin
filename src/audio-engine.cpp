@@ -62,12 +62,12 @@ struct ModelDef {
 };
 
 static const ModelDef kModels[] = {
-	{"large-v3-turbo-q5_0", "Large v3 Turbo (Q5_0)", "ggml-large-v3-turbo-q5_0.bin",
-	 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"},
-	{"small.en-q5_1", "Small.en (Q5_1)", "ggml-small.en-q5_1.bin",
+	{"small.en-q5_1", "small.en (Recommended, fast & accurate)", "ggml-small.en-q5_1.bin",
 	 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin"},
-	{"base.en", "Base.en", "ggml-base.en.bin",
+	{"base.en", "base.en (Fastest, low CPU)", "ggml-base.en.bin",
 	 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"},
+	{"large-v3-turbo-q5_0", "large-v3-turbo (High accuracy, needs a fast Mac)", "ggml-large-v3-turbo-q5_0.bin",
+	 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"},
 };
 
 static bool readWavFile(const QString &filePath, std::vector<float> &out16kMono, double &durationSec)
@@ -302,11 +302,7 @@ bool AudioEngine::loadModelFile(const QString &path)
 
 QString AudioEngine::defaultModelId()
 {
-#if defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__))
-	return QStringLiteral("large-v3-turbo-q5_0");
-#else
 	return QStringLiteral("small.en-q5_1");
-#endif
 }
 
 QString AudioEngine::currentModelChoice() const
@@ -527,7 +523,7 @@ void AudioEngine::processAudio(const struct audio_data *data, obs_source_t *sour
 	}
 }
 
-void AudioEngine::runAudioFileTest(const QString &filePath)
+void AudioEngine::runAudioFileTest(const QString &filePath, bool realTime)
 {
 	std::vector<float> samples;
 	double duration = 0.0;
@@ -537,18 +533,28 @@ void AudioEngine::runAudioFileTest(const QString &filePath)
 		return;
 	}
 
-	fprintf(stderr, "[LD Worship & Word] Running audio file test on: %s (%.1f sec, %zu samples)\n",
-		filePath.toUtf8().constData(), duration, samples.size());
+	fprintf(stderr, "[LD Worship & Word] Running audio file test (%s): %s (%.1f sec, %zu samples)\n",
+		realTime ? "real-time" : "batch", filePath.toUtf8().constData(), duration, samples.size());
 
 	m_core.reset();
 
 	constexpr size_t kChunkSize = 16000;
 	double streamTime = 0.0;
+	auto wallStart = std::chrono::steady_clock::now();
 
 	for (size_t offset = 0; offset < samples.size(); offset += kChunkSize) {
 		size_t n = std::min(kChunkSize, samples.size() - offset);
 		std::vector<float> chunk(samples.begin() + offset, samples.begin() + offset + n);
 		streamTime += static_cast<double>(n) / 16000.0;
+
+		if (realTime) {
+			auto now = std::chrono::steady_clock::now();
+			double wallElapsed = std::chrono::duration<double>(now - wallStart).count();
+			if (wallElapsed < streamTime) {
+				std::this_thread::sleep_for(std::chrono::duration<double>(streamTime - wallElapsed));
+			}
+		}
+
 		m_core.processWindowDirect(chunk, streamTime);
 	}
 

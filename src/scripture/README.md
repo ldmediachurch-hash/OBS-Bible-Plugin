@@ -5,7 +5,7 @@
 | Folder | What it is |
 |---|---|
 | `cpp/src/` | **The engine in C++17**, for the plugin: `scripture_detect.hpp/.cpp` and `scripture_bible_structure.hpp`. No dependencies. Goes in the plugin's `src/scripture/` folder. |
-| `cpp/tests/` | 81 tests, plus the KJV as `kjv.tsv` for the quote tests |
+| `cpp/tests/` | 84 tests, plus the KJV as `kjv.tsv` for the quote tests |
 | `js/` | The same engine in JavaScript, with a test page you can open in Chrome (`node serve.mjs`) |
 | `test-audio/` | The Pewbeam demo clip as 16 kHz WAV, plus the references it should detect |
 | `ANTIGRAVITY_PROMPT.md` | Copy-paste instructions for Antigravity's agent: Part 1 wires in the engine, Part 2 fixes the speech-to-text |
@@ -57,7 +57,7 @@ I simulated live listening with the Whisper **small** model and fed the text int
 
 ```
 g++ -std=c++17 -O2 -Icpp/src cpp/src/scripture_detect.cpp cpp/tests/scripture_detect_test.cpp -o scripture_detect_test
-./scripture_detect_test cpp/tests/kjv.tsv        # 81 passed, 0 failed
+./scripture_detect_test cpp/tests/kjv.tsv        # 84 passed, 0 failed
 ```
 
 ## Using it from the plugin

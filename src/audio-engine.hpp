@@ -64,8 +64,8 @@ public:
 
 	DetectionCore &core() { return m_core; }
 
-	// Run WAV audio file test through streaming pipeline faster than real-time
-	void runAudioFileTest(const QString &filePath);
+	// Run WAV audio file test through streaming pipeline (real-time or faster-than-real-time)
+	void runAudioFileTest(const QString &filePath, bool realTime = true);
 
 	// Internal callback from OBS
 	void processAudio(const struct audio_data *data, obs_source_t *source, bool muted);

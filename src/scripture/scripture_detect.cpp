@@ -483,7 +483,24 @@ std::vector<Ref> parseReferences(const std::vector<Token>& toks, Context context
       i++;
     }
   }
-  std::stable_sort(out.begin(), out.end(), [](const Ref& a, const Ref& b) { return a.start < b.start; });
+  // "Romans chapter 8 and verse 28" / "verse 16 of John chapter 3": a chapter-only mention right next to a verse
+  // in the same chapter is one reference, not two
+  auto byStart = [](const Ref& a, const Ref& b) { return a.start < b.start; };
+  std::stable_sort(out.begin(), out.end(), byStart);
+  for (int i = int(out.size()) - 1; i >= 0; i--) {
+    const Ref A = out[size_t(i)];
+    if (A.verse || A.kind != "explicit") continue;
+    for (size_t j = 0; j < out.size(); j++) {
+      Ref& B = out[j];
+      if (int(j) == i || !B.verse || B.book != A.book || B.chapter != A.chapter) continue;
+      if (!((B.start >= A.end && B.start - A.end <= 2) || (A.start >= B.end && A.start - B.end <= 3))) continue;
+      B.kind = "explicit"; B.confidence = std::max(B.confidence, 0.9);
+      B.start = std::min(A.start, B.start); B.end = std::max(A.end, B.end);
+      out.erase(out.begin() + i);
+      break;
+    }
+  }
+  std::stable_sort(out.begin(), out.end(), byStart);
   return out;
 }
 
