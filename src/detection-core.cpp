@@ -28,6 +28,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <sstream>
 
 namespace {
 
@@ -49,6 +50,108 @@ static bool isSentenceEndWord(const std::string &w)
 		return false;
 	char last = w.back();
 	return (last == '.' || last == '?' || last == '!' || last == ';');
+}
+
+static bool isStockSilenceOutput(const std::string &segText)
+{
+	std::string c = cleanWordForComparison(segText);
+	if (c.empty())
+		return true;
+
+	if (c == "thankyou" || c == "thankyouverymuch" || c == "thanksforwatching" ||
+	    c == "blankaudio" || c == "amen" || c == "you" || c == "subtitlesby" ||
+	    c == "thankyouforwatching" || c == "bye" || c == "goodbye") {
+		return true;
+	}
+
+	// Check bracketed special tokens: [BLANK_AUDIO], [MUSIC], (music), [APPLAUSE], etc.
+	std::string trimmed;
+	for (char ch : segText) {
+		if (!std::isspace(static_cast<unsigned char>(ch)))
+			trimmed += ch;
+	}
+	if (!trimmed.empty()) {
+		if ((trimmed.front() == '[' && trimmed.back() == ']') ||
+		    (trimmed.front() == '(' && trimmed.back() == ')')) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool isMostlyPrompt(const std::string &segText, const std::string &prompt)
+{
+	std::string cSeg = cleanWordForComparison(segText);
+	if (cSeg.empty())
+		return true;
+
+	static const std::string cStaticPrompt = cleanWordForComparison("A sermon. The preacher reads from the Bible.");
+	if (cSeg.length() >= 6 && cStaticPrompt.find(cSeg) != std::string::npos) {
+		return true;
+	}
+
+	const std::vector<std::string> promptWords = {"a", "sermon", "the", "preacher", "reads", "from", "bible"};
+	std::stringstream ss(segText);
+	std::string token;
+	int totalWords = 0;
+	int promptWordMatches = 0;
+	while (ss >> token) {
+		std::string c = cleanWordForComparison(token);
+		if (c.empty())
+			continue;
+		totalWords++;
+		for (const auto &pw : promptWords) {
+			if (c == pw) {
+				promptWordMatches++;
+				break;
+			}
+		}
+	}
+	if (totalWords > 0 && (static_cast<float>(promptWordMatches) / static_cast<float>(totalWords)) >= 0.7f) {
+		return true;
+	}
+
+	return false;
+}
+
+static bool hasRepetitionLoop(const std::vector<TimedWord> &words)
+{
+	if (words.size() < 6)
+		return false;
+
+	std::vector<std::string> clean;
+	clean.reserve(words.size());
+	for (const auto &w : words) {
+		std::string c = cleanWordForComparison(w.text);
+		if (!c.empty())
+			clean.push_back(c);
+	}
+
+	int n = static_cast<int>(clean.size());
+	if (n < 6)
+		return false;
+
+	// Check for consecutive repetitions of 2, 3, or 4 word phrases (3+ times)
+	for (int len = 2; len <= 4; ++len) {
+		for (int i = 0; i + 3 * len <= n; ++i) {
+			bool match = true;
+			for (int k = 1; k < 3; ++k) {
+				for (int j = 0; j < len; ++j) {
+					if (clean[i + j] != clean[i + k * len + j]) {
+						match = false;
+						break;
+					}
+				}
+				if (!match)
+					break;
+			}
+			if (match)
+				return true;
+		}
+	}
+
+	return false;
 }
 
 static std::string bookToOsis(int bookNumber, const QString &bookName)
@@ -617,6 +720,23 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 
 	int n_segments = whisper_full_n_segments(m_whisperCtx);
 	for (int s = 0; s < n_segments; ++s) {
+		// Step 11: Hallucination filter - drop if no_speech_prob > 0.6
+		float noSpeechProb = whisper_full_get_segment_no_speech_prob(m_whisperCtx, s);
+		if (noSpeechProb > 0.6f) {
+			continue;
+		}
+
+		// Step 11: Drop stock silence outputs and text that is mostly the prompt
+		const char *segTextRaw = whisper_full_get_segment_text(m_whisperCtx, s);
+		std::string segText = segTextRaw ? segTextRaw : "";
+		if (isStockSilenceOutput(segText)) {
+			continue;
+		}
+		if (isMostlyPrompt(segText, prompt)) {
+			continue;
+		}
+
+		std::vector<TimedWord> segWords;
 		int n_tokens = whisper_full_n_tokens(m_whisperCtx, s);
 		for (int t = 0; t < n_tokens; ++t) {
 			const char *txt = whisper_full_get_token_text(m_whisperCtx, s, t);
@@ -626,19 +746,30 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 			std::string tokenStr(txt);
 
 			bool isStartOfWord = (tokenStr[0] == ' ' || tokenStr[0] == '\t' || tokenStr[0] == '\n');
-			if (isStartOfWord || words.empty()) {
+			if (isStartOfWord || segWords.empty()) {
 				std::string w = isStartOfWord ? tokenStr.substr(1) : tokenStr;
 				if (!w.empty()) {
 					double t0 = bufStartSec + (static_cast<double>(data.t0) * 0.01);
 					double t1 = bufStartSec + (static_cast<double>(data.t1) * 0.01);
-					words.push_back({w, t0, t1});
+					segWords.push_back({w, t0, t1});
 				}
 			} else {
-				words.back().text += tokenStr;
+				segWords.back().text += tokenStr;
 				double t1 = bufStartSec + (static_cast<double>(data.t1) * 0.01);
-				words.back().endTimeSec = std::max(words.back().endTimeSec, t1);
+				segWords.back().endTimeSec = std::max(segWords.back().endTimeSec, t1);
 			}
 		}
+
+		// Step 11: Drop segment if it repeats a 2-4 word phrase 3+ times
+		if (hasRepetitionLoop(segWords)) {
+			continue;
+		}
+
+		words.insert(words.end(), segWords.begin(), segWords.end());
+	}
+
+	if (hasRepetitionLoop(words)) {
+		words.clear();
 	}
 	return words;
 }
