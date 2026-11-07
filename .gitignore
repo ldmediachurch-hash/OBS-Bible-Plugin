@@ -9,6 +9,7 @@
 !/src
 !/tests
 !/tools
+!/test-audio
 !.clang-format
 !.gersemirc
 !.gitignore

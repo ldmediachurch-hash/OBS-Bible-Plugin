@@ -1,0 +1,6 @@
+Expected detections (time = when the verse number is spoken):
+  1.6 s   Psalms 27:1
+ 13.9 s   Psalms 139:23
+ 28.7 s   Psalms 138:7
+ 43.0 s   Psalms 138:8
+No other confirmed references.
