@@ -573,8 +573,9 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 	wparams.n_threads = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
 	wparams.audio_ctx = 0;
 
-	// Prompt: "A sermon. The preacher reads from the Bible." + last ~200 characters of committed text
-	std::string prompt = "A sermon. The preacher reads from the Bible.";
+	// Step 9: Neutral sermon prompt + last ~200 characters of committed text. Never put example references in prompt.
+	static constexpr char kNeutralSermonPrompt[] = "A sermon. The preacher reads from the Bible.";
+	std::string prompt = kNeutralSermonPrompt;
 	if (!m_committedHistory.empty()) {
 		size_t take = std::min(m_committedHistory.size(), static_cast<size_t>(200));
 		prompt += " " + m_committedHistory.substr(m_committedHistory.size() - take);
