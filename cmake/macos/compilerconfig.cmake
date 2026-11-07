@@ -5,8 +5,8 @@ include_guard(GLOBAL)
 option(ENABLE_COMPILER_TRACE "Enable clang time-trace" OFF)
 mark_as_advanced(ENABLE_COMPILER_TRACE)
 
-if(NOT XCODE)
-  message(FATAL_ERROR "Building OBS Studio on macOS requires Xcode generator.")
+if(NOT XCODE AND NOT CMAKE_GENERATOR MATCHES "Ninja")
+  message(FATAL_ERROR "Building OBS Studio on macOS requires Xcode or Ninja generator.")
 endif()
 
 include(ccache)
@@ -16,6 +16,9 @@ add_compile_options("$<$<NOT:$<COMPILE_LANGUAGE:Swift>>:-fopenmp-simd>")
 
 # Ensure recent enough Xcode and platform SDK
 function(check_sdk_requirements)
+  if(NOT XCODE)
+    return()
+  endif()
   set(obs_macos_minimum_sdk 15.0) # Keep in sync with Xcode
   set(obs_macos_minimum_xcode 16.0) # Keep in sync with SDK
   execute_process(
