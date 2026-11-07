@@ -14,6 +14,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include "scripture/scripture_bible_structure.hpp"
 
 #include <obs.h>
+#include <obs-module.h>
 #include <whisper.h>
 
 #include <QDateTime>
@@ -401,6 +402,23 @@ void DetectionCore::runStreamingPass()
 	if (m_streamBuffer.size() < static_cast<size_t>(2.5 * 16000))
 		return;
 
+	// Step 10: Don't run whisper on segments with no speech
+	float maxRms = 0.0f;
+	constexpr size_t subSize = 3200; // 200ms @ 16kHz
+	for (size_t i = 0; i + subSize <= m_streamBuffer.size(); i += subSize) {
+		float sum = 0.0f;
+		for (size_t j = 0; j < subSize; ++j) {
+			float s = m_streamBuffer[i + j];
+			sum += s * s;
+		}
+		float subRms = sqrtf(sum / static_cast<float>(subSize));
+		if (subRms > maxRms)
+			maxRms = subRms;
+	}
+	if (maxRms < 0.002f) {
+		return;
+	}
+
 	// Hard cap the buffer at 15s
 	constexpr size_t kMaxBufferSamples = 15 * 16000;
 	if (m_streamBuffer.size() > kMaxBufferSamples) {
@@ -572,6 +590,17 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 	wparams.no_context = true;
 	wparams.n_threads = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
 	wparams.audio_ctx = 0;
+
+	// Step 10: Silero VAD (built into whisper.cpp 1.7.6+)
+	char *vadCfg = obs_module_config_path("models/ggml-silero-v5.1.2.bin");
+	std::string vadPath = vadCfg ? vadCfg : "";
+	bfree(vadCfg);
+
+	if (!vadPath.empty() && QFile::exists(QString::fromStdString(vadPath))) {
+		wparams.vad = true;
+		wparams.vad_model_path = vadPath.c_str();
+		wparams.vad_params = whisper_vad_default_params();
+	}
 
 	// Step 9: Neutral sermon prompt + last ~200 characters of committed text. Never put example references in prompt.
 	static constexpr char kNeutralSermonPrompt[] = "A sermon. The preacher reads from the Bible.";

@@ -262,6 +262,21 @@ void AudioEngine::loadModel()
 		}
 	}
 
+	// Check if Silero VAD model exists, download in background if missing
+	char *vadCfg = obs_module_config_path("models/ggml-silero-v5.1.2.bin");
+	if (vadCfg) {
+		QString vadPath = QString::fromUtf8(vadCfg);
+		bfree(vadCfg);
+		if (!QFile::exists(vadPath)) {
+			std::thread([vadPath]() {
+				QStringList args;
+				args << QStringLiteral("-L") << QStringLiteral("-s") << QStringLiteral("-o") << vadPath
+				     << QStringLiteral("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin");
+				QProcess::execute(QStringLiteral("curl"), args);
+			}).detach();
+		}
+	}
+
 	// Not on disk - download it to config folder
 	downloadModel(QString::fromUtf8(def->id));
 }
