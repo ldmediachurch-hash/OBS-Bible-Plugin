@@ -278,6 +278,8 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 		[this](bool, const QString &) { updateAudioStatusPill(); });
 	connect(&AudioEngine::instance(), &AudioEngine::modelLoadedChanged, this,
 		[this](bool, const QString &) { updateAudioStatusPill(); });
+	connect(&AudioEngine::instance(), &AudioEngine::modelDownloadProgress, this,
+		[this](int) { updateAudioStatusPill(); });
 
 	refreshAudioSources();
 	updateTabStyles();
@@ -316,7 +318,12 @@ void WorshipWordDock::refreshAudioSources()
 
 void WorshipWordDock::updateAudioStatusPill()
 {
-	if (!AudioEngine::instance().isModelLoaded()) {
+	if (AudioEngine::instance().isDownloading()) {
+		m_statusPill->setText(
+			QStringLiteral("● Downloading (%1%)").arg(AudioEngine::instance().downloadPercent()));
+		m_statusPill->setStyleSheet(QStringLiteral(
+			"QPushButton { background-color: rgba(59, 130, 246, 0.15); color: #60A5FA; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 11px; font-weight: 500; }"));
+	} else if (!AudioEngine::instance().isModelLoaded()) {
 		m_statusPill->setText(QStringLiteral("● Loading model"));
 		m_statusPill->setStyleSheet(QStringLiteral(
 			"QPushButton { background-color: rgba(245, 158, 11, 0.15); color: #F59E0B; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(245, 158, 11, 0.3); font-size: 11px; font-weight: 500; }"));
@@ -348,15 +355,41 @@ void WorshipWordDock::openAudioStatusMenu()
 	}
 
 	menu->addSeparator();
-	auto *actReload = menu->addAction(QStringLiteral("Reload Default Model (base.en-q5_1)"));
-	connect(actReload, &QAction::triggered, []() { AudioEngine::instance().loadModel(); });
-	auto *actBrowse = menu->addAction(QStringLiteral("Browse Custom Model…"));
+	auto *modelMenu = menu->addMenu(QStringLiteral("Whisper Model"));
+	const QString cur = AudioEngine::instance().currentModelChoice();
+
+	auto *actTurbo = modelMenu->addAction(QStringLiteral("Large v3 Turbo (Q5_0) [Apple Silicon]"));
+	actTurbo->setCheckable(true);
+	actTurbo->setChecked(cur == QStringLiteral("large-v3-turbo-q5_0"));
+	connect(actTurbo, &QAction::triggered, [this]() {
+		AudioEngine::instance().setModelChoice(QStringLiteral("large-v3-turbo-q5_0"));
+		saveConfig();
+	});
+
+	auto *actSmall = modelMenu->addAction(QStringLiteral("Small.en (Q5_1) [Standard]"));
+	actSmall->setCheckable(true);
+	actSmall->setChecked(cur == QStringLiteral("small.en-q5_1"));
+	connect(actSmall, &QAction::triggered, [this]() {
+		AudioEngine::instance().setModelChoice(QStringLiteral("small.en-q5_1"));
+		saveConfig();
+	});
+
+	auto *actBase = modelMenu->addAction(QStringLiteral("Base.en [Weak PCs]"));
+	actBase->setCheckable(true);
+	actBase->setChecked(cur == QStringLiteral("base.en"));
+	connect(actBase, &QAction::triggered, [this]() {
+		AudioEngine::instance().setModelChoice(QStringLiteral("base.en"));
+		saveConfig();
+	});
+
+	auto *actBrowse = modelMenu->addAction(QStringLiteral("Browse Custom Model…"));
 	connect(actBrowse, &QAction::triggered, [this]() {
 		QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Select Whisper GGML Model File"),
 							    QString(),
 							    QStringLiteral("GGML Model (*.bin);;All Files (*.*)"));
 		if (!path.isEmpty()) {
-			AudioEngine::instance().loadModelFile(path);
+			AudioEngine::instance().loadCustomModelFile(path);
+			saveConfig();
 		}
 	});
 
@@ -558,5 +591,29 @@ void WorshipWordDock::onScriptureDetected(const QString &label, int confidence, 
 	m_transcriptView->ensureCursorVisible();
 }
 
-void WorshipWordDock::loadConfig() {}
-void WorshipWordDock::saveConfig() {}
+void WorshipWordDock::loadConfig()
+{
+	QFile file(dockConfigPath());
+	if (!file.open(QIODevice::ReadOnly))
+		return;
+
+	QJsonObject obj = QJsonDocument::fromJson(file.readAll()).object();
+	if (obj.contains(QStringLiteral("model"))) {
+		QString modelId = obj.value(QStringLiteral("model")).toString();
+		if (!modelId.isEmpty()) {
+			AudioEngine::instance().setModelChoice(modelId);
+		}
+	}
+}
+
+void WorshipWordDock::saveConfig()
+{
+	QDir().mkpath(QFileInfo(dockConfigPath()).dir().absolutePath());
+	QFile file(dockConfigPath());
+	if (!file.open(QIODevice::WriteOnly))
+		return;
+
+	QJsonObject obj;
+	obj[QStringLiteral("model")] = AudioEngine::instance().currentModelChoice();
+	file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+}

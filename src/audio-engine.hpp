@@ -49,6 +49,12 @@ public:
 	QString modelStatusText() const;
 	void loadModel();
 	bool loadModelFile(const QString &path);
+	static QString defaultModelId();
+	QString currentModelChoice() const;
+	void setModelChoice(const QString &modelId);
+	void loadCustomModelFile(const QString &path);
+	bool isDownloading() const { return m_downloading.load(std::memory_order_relaxed); }
+	int downloadPercent() const { return m_downloadPercent.load(std::memory_order_relaxed); }
 
 	// Set active channel mode for suggestion prioritization (Scripture vs Lyrics)
 	void setChannelMode(Channel ch);
@@ -70,6 +76,7 @@ signals:
 				  double timestampSec);
 	void statusChanged(bool listening, const QString &sourceName);
 	void modelLoadedChanged(bool loaded, const QString &statusText);
+	void modelDownloadProgress(int percent);
 
 private:
 	AudioEngine();
@@ -89,6 +96,11 @@ private:
 	std::vector<float> m_resampleBuffer;
 
 	DetectionCore m_core;
+
+	QString m_modelChoice;
+	std::atomic<bool> m_downloading{false};
+	std::atomic<int> m_downloadPercent{0};
+	void downloadModel(const QString &modelId);
 };
 
 // 5-bar Mini Signal Meter Widget (Mockup fidelity)

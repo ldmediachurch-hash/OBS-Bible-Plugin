@@ -19,6 +19,7 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QFileInfo>
 #include <QPainter>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QTimer>
 
 #include <algorithm>
@@ -58,35 +59,49 @@ static bool enum_audio_sources(void *param, obs_source_t *source)
 	return true;
 }
 
-QString findExistingModelPath()
+struct ModelDef {
+	const char *id;
+	const char *name;
+	const char *filename;
+	const char *url;
+};
+
+static const ModelDef kModels[] = {
+	{"large-v3-turbo-q5_0", "Large v3 Turbo (Q5_0)", "ggml-large-v3-turbo-q5_0.bin",
+	 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"},
+	{"small.en-q5_1", "Small.en (Q5_1)", "ggml-small.en-q5_1.bin",
+	 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin"},
+	{"base.en", "Base.en", "ggml-base.en.bin",
+	 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"},
+};
+
+static const ModelDef *findModelDef(const QString &id)
 {
-	// Priority 1: Base model q5_1 (LDWW 1.2 default)
-	const char *models[] = {"models/ggml-base.en-q5_1.bin", "models/ggml-base.en.bin", "models/ggml-tiny.en.bin"};
-	for (const char *m : models) {
-		char *bundled = obs_module_file(m);
-		if (bundled) {
-			QString s = QString::fromUtf8(bundled);
-			bfree(bundled);
-			if (QFile::exists(s))
-				return s;
-		}
-		char *cfg = obs_module_config_path(m);
-		if (cfg) {
-			QString s = QString::fromUtf8(cfg);
-			bfree(cfg);
-			if (QFile::exists(s))
-				return s;
-		}
+	for (const auto &m : kModels) {
+		if (id == QString::fromUtf8(m.id))
+			return &m;
 	}
-	return QString();
+	return nullptr;
 }
 
-QString defaultModelDestPath()
+static QString getModelFilePath(const char *filename)
 {
-	char *cfg = obs_module_config_path("models/ggml-base.en-q5_1.bin");
-	QString s = cfg ? QString::fromUtf8(cfg) : QString();
-	bfree(cfg);
-	return s;
+	QString rel = QStringLiteral("models/") + QString::fromUtf8(filename);
+	char *cfg = obs_module_config_path(rel.toUtf8().constData());
+	if (cfg) {
+		QString s = QString::fromUtf8(cfg);
+		bfree(cfg);
+		if (QFile::exists(s))
+			return s;
+	}
+	char *bundled = obs_module_file(rel.toUtf8().constData());
+	if (bundled) {
+		QString s = QString::fromUtf8(bundled);
+		bfree(bundled);
+		if (QFile::exists(s))
+			return s;
+	}
+	return QString();
 }
 
 } // namespace
@@ -189,32 +204,132 @@ bool AudioEngine::loadModelFile(const QString &path)
 	return m_core.loadModel(path);
 }
 
+QString AudioEngine::defaultModelId()
+{
+#if defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__))
+	return QStringLiteral("large-v3-turbo-q5_0");
+#else
+	return QStringLiteral("small.en-q5_1");
+#endif
+}
+
+QString AudioEngine::currentModelChoice() const
+{
+	if (m_modelChoice.isEmpty()) {
+		return defaultModelId();
+	}
+	return m_modelChoice;
+}
+
+void AudioEngine::setModelChoice(const QString &modelId)
+{
+	m_modelChoice = modelId;
+	loadModel();
+}
+
+void AudioEngine::loadCustomModelFile(const QString &path)
+{
+	m_modelChoice = QStringLiteral("custom:") + path;
+	m_core.loadModel(path);
+}
+
 void AudioEngine::loadModel()
 {
-	QString path = findExistingModelPath();
-	if (path.isEmpty()) {
-		QString dest = defaultModelDestPath();
-		if (!dest.isEmpty()) {
-			QFileInfo fi(dest);
-			QDir().mkpath(fi.dir().absolutePath());
-
-			// Download base.en-q5_1 model via curl in background if missing
-			std::thread([this, dest]() {
-				QStringList args;
-				args << QStringLiteral("-L") << QStringLiteral("-s") << QStringLiteral("-o") << dest
-				     << QStringLiteral(
-						"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin");
-				int code = QProcess::execute(QStringLiteral("curl"), args);
-				if (code == 0 && QFile::exists(dest)) {
-					loadModel();
-				}
-			}).detach();
+	QString choice = currentModelChoice();
+	if (choice.startsWith(QStringLiteral("custom:"))) {
+		QString path = choice.mid(7);
+		if (QFile::exists(path)) {
+			m_core.loadModel(path);
+			return;
 		}
-		emit modelLoadedChanged(false, QStringLiteral("Model not found on disk"));
+	}
+
+	const ModelDef *def = findModelDef(choice);
+	if (!def) {
+		def = findModelDef(defaultModelId());
+	}
+	if (!def)
+		return;
+
+	QString existing = getModelFilePath(def->filename);
+	if (!existing.isEmpty()) {
+		m_core.loadModel(existing);
 		return;
 	}
 
-	m_core.loadModel(path);
+	// Also check fallback models if default isn't downloaded yet
+	for (const auto &m : kModels) {
+		QString alt = getModelFilePath(m.filename);
+		if (!alt.isEmpty()) {
+			// Found an existing alternate model, but initiate download for the chosen one
+			m_core.loadModel(alt);
+			break;
+		}
+	}
+
+	// Not on disk - download it to config folder
+	downloadModel(QString::fromUtf8(def->id));
+}
+
+void AudioEngine::downloadModel(const QString &modelId)
+{
+	if (m_downloading.load(std::memory_order_relaxed))
+		return;
+
+	const ModelDef *def = findModelDef(modelId);
+	if (!def)
+		return;
+
+	char *cfg = obs_module_config_path("models");
+	QString dirPath = cfg ? QString::fromUtf8(cfg) : QString();
+	bfree(cfg);
+	if (dirPath.isEmpty())
+		return;
+
+	QDir().mkpath(dirPath);
+	QString destPath = dirPath + QLatin1Char('/') + QString::fromUtf8(def->filename);
+	QString partPath = destPath + QStringLiteral(".part");
+
+	m_downloading.store(true, std::memory_order_relaxed);
+	m_downloadPercent.store(0, std::memory_order_relaxed);
+	emit modelDownloadProgress(0);
+
+	auto *proc = new QProcess();
+	QObject::connect(proc, &QProcess::readyReadStandardError, [this, proc]() {
+		QByteArray err = proc->readAllStandardError();
+		static QRegularExpression rx(QStringLiteral(R"((\d{1,3}(?:\.\d+)?)%)"));
+		QRegularExpressionMatchIterator it = rx.globalMatch(QString::fromUtf8(err));
+		int lastPct = -1;
+		while (it.hasNext()) {
+			auto match = it.next();
+			lastPct = static_cast<int>(std::round(match.captured(1).toDouble()));
+		}
+		if (lastPct >= 0 && lastPct <= 100) {
+			m_downloadPercent.store(lastPct, std::memory_order_relaxed);
+			emit modelDownloadProgress(lastPct);
+		}
+	});
+
+	QObject::connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+			 [this, proc, destPath, partPath](int exitCode, QProcess::ExitStatus) {
+		m_downloading.store(false, std::memory_order_relaxed);
+		proc->deleteLater();
+		if (exitCode == 0 && QFile::exists(partPath)) {
+			QFile::remove(destPath);
+			QFile::rename(partPath, destPath);
+			emit modelDownloadProgress(100);
+			m_core.loadModel(destPath);
+		} else {
+			QFile::remove(partPath);
+			emit modelDownloadProgress(-1);
+			emit modelLoadedChanged(false, QStringLiteral("Model download failed"));
+		}
+	});
+
+	QStringList args;
+	args << QStringLiteral("-#") << QStringLiteral("-L") << QStringLiteral("-o") << partPath
+	     << QString::fromUtf8(def->url);
+	proc->start(QStringLiteral("curl"), args);
 }
 
 void AudioEngine::setChannelMode(Channel ch)

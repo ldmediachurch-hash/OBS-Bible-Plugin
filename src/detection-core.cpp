@@ -521,7 +521,7 @@ QString DetectionCore::transcribeChunk(const std::vector<float> &chunk)
 	wparams.language = "en";
 	wparams.translate = false;
 	wparams.no_context = true;
-	wparams.n_threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 2, 8);
+	wparams.n_threads = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
 
 	// Phase 1: audio_ctx matches 3.0s window length (3000ms / 20 = 150 frames)
 	// Stops Whisper from padding every window to 30 seconds!
