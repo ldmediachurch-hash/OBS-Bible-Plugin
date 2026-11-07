@@ -147,11 +147,35 @@ target_sources(
     src/lyrics-dock.hpp
     src/worship-word-dock.cpp
     src/worship-word-dock.hpp
+    src/scripture/scripture_detect.hpp
+    src/scripture/scripture_detect.cpp
+    src/scripture/scripture_bible_structure.hpp
     data/icons/icons.qrc
+)
+target_include_directories(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/scripture
 )
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
+
+add_executable(
+  scripture_detect_test
+  tests/scripture_detect_test.cpp
+  src/scripture/scripture_detect.cpp
+  src/scripture/scripture_detect.hpp
+  src/scripture/scripture_bible_structure.hpp
+)
+target_include_directories(scripture_detect_test PRIVATE src/scripture)
+set_target_properties(
+  scripture_detect_test
+  PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
 
 if(BUILD_TESTS)
   enable_testing()

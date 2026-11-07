@@ -142,6 +142,11 @@ jobs:
           codesign: ${{ fromJSON(needs.check-event.outputs.codesign) }}
           codesignIdent: ${{ steps.codesign.outputs.codesignIdent }}
 
+      - name: Run Tests 🧪
+        run: |
+          cmake --build build_macos --target scripture_detect_test --config ${{ needs.check-event.outputs.config }}
+          ./build_macos/${{ needs.check-event.outputs.config }}/scripture_detect_test tests/kjv.tsv || ./build_macos/scripture_detect_test tests/kjv.tsv
+
       - name: Package Plugin 📀
         uses: ./.github/actions/package-plugin
         with:
@@ -220,6 +225,7 @@ jobs:
       - name: Run Tests 🧪
         run: |
           ./build_x86_64/lyrics-tests
+          ./build_x86_64/scripture_detect_test tests/kjv.tsv
 
       - name: Package Plugin 📀
         uses: ./.github/actions/package-plugin
@@ -286,6 +292,12 @@ jobs:
         with:
           target: x64
           config: ${{ needs.check-event.outputs.config }}
+
+      - name: Run Tests 🧪
+        shell: pwsh
+        run: |
+          cmake --build build_x64 --target scripture_detect_test --config ${{ needs.check-event.outputs.config }}
+          .\build_x64\${{ needs.check-event.outputs.config }}\scripture_detect_test.exe tests\kjv.tsv
 
       - name: Package Plugin 📀
         uses: ./.github/actions/package-plugin
