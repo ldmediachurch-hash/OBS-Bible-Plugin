@@ -394,10 +394,37 @@ void WorshipWordDock::openAudioStatusMenu()
 	});
 
 	menu->addSeparator();
+	menu->addAction(QStringLiteral("Test with audio file…"), this, &WorshipWordDock::testWithAudioFile);
+
+	menu->addSeparator();
 	auto *actFeedNote = menu->addAction(QStringLiteral("Tip: Use a dry pastor-mic feed (aux send, pre-fader), not the program mix with music."));
 	actFeedNote->setEnabled(false);
 
 	menu->exec(m_statusPill->mapToGlobal(QPoint(0, m_statusPill->height())));
+}
+
+void WorshipWordDock::testWithAudioFile()
+{
+	QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Select WAV Audio File to Test"),
+						    QString(),
+						    QStringLiteral("WAV Files (*.wav);;All Files (*.*)"));
+	if (path.isEmpty())
+		return;
+
+	if (m_transcriptContainer && !m_transcriptContainer->isVisible()) {
+		m_transcriptContainer->setVisible(true);
+		m_transcriptToggleBtn->setText(QStringLiteral("▼  Transcript Debug"));
+		m_transcriptToggleBtn->setChecked(true);
+	}
+
+	if (m_transcriptView) {
+		m_transcriptView->appendPlainText(QStringLiteral("=== Starting Audio File Test: %1 ===").arg(QFileInfo(path).fileName()));
+		m_transcriptView->ensureCursorVisible();
+	}
+
+	std::thread([path]() {
+		AudioEngine::instance().runAudioFileTest(path);
+	}).detach();
 }
 
 void WorshipWordDock::audioSourceChanged(int index)

@@ -163,6 +163,22 @@ set_target_properties(
     CXX_STANDARD_REQUIRED ON
 )
 
+add_executable(
+  pewbeam_audio_test
+  tests/pewbeam_audio_test.cpp
+  src/scripture/scripture_detect.cpp
+  src/scripture/scripture_detect.hpp
+  src/scripture/scripture_bible_structure.hpp
+)
+target_include_directories(pewbeam_audio_test PRIVATE src src/scripture)
+target_link_libraries(pewbeam_audio_test PRIVATE whisper)
+set_target_properties(
+  pewbeam_audio_test
+  PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
+
 if(BUILD_TESTS)
   enable_testing()
   add_executable(lyrics-tests tests/lyrics-tests.cpp src/lyrics.cpp src/lyrics.hpp)

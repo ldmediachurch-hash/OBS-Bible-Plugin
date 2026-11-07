@@ -228,6 +228,51 @@ static void applyAgcTo20dBFS(std::vector<float> &audio)
 	}
 }
 
+static std::vector<TimedWord> getUncommittedWords(
+	const std::vector<TimedWord> &words,
+	const std::string &committedHistory,
+	double lastCommittedTimeSec)
+{
+	if (words.empty())
+		return {};
+	if (committedHistory.empty() || lastCommittedTimeSec < 0.0)
+		return words;
+
+	std::vector<std::string> histWords;
+	std::stringstream ss(committedHistory);
+	std::string tw;
+	while (ss >> tw) {
+		std::string c = cleanWordForComparison(tw);
+		if (!c.empty())
+			histWords.push_back(c);
+	}
+
+	int matchIdx = -1;
+	for (int i = 0; i < static_cast<int>(words.size()); ++i) {
+		if (std::abs(words[i].endTimeSec - lastCommittedTimeSec) < 0.8) {
+			std::string cw = cleanWordForComparison(words[i].text);
+			if (!histWords.empty() && cw == histWords.back()) {
+				matchIdx = i;
+				break;
+			}
+		}
+	}
+
+	if (matchIdx >= 0) {
+		if (matchIdx + 1 < static_cast<int>(words.size()))
+			return std::vector<TimedWord>(words.begin() + matchIdx + 1, words.end());
+		return {};
+	}
+
+	std::vector<TimedWord> uncommitted;
+	for (const auto &w : words) {
+		if (w.endTimeSec > lastCommittedTimeSec - 0.05) {
+			uncommitted.push_back(w);
+		}
+	}
+	return uncommitted;
+}
+
 static std::string bookToOsis(int bookNumber, const QString &bookName)
 {
 	if (bookNumber >= 1 && bookNumber <= 66) {
@@ -615,12 +660,7 @@ void DetectionCore::runStreamingPass()
 	std::vector<TimedWord> words = transcribeWords(audioCopy, bufStart);
 
 	// Drop words that end before the last committed word's end time (already committed)
-	std::vector<TimedWord> uncommitted;
-	for (const auto &w : words) {
-		if (w.endTimeSec > m_lastCommittedTimeSec + 0.05) {
-			uncommitted.push_back(w);
-		}
-	}
+	std::vector<TimedWord> uncommitted = getUncommittedWords(words, m_committedHistory, m_lastCommittedTimeSec);
 
 	// Compare the remaining words with the previous pass
 	size_t prefixLen = 0;
@@ -816,12 +856,20 @@ std::vector<TimedWord> DetectionCore::transcribeWords(const std::vector<float> &
 
 		std::vector<TimedWord> segWords;
 		int n_tokens = whisper_full_n_tokens(m_whisperCtx, s);
+		whisper_token eotToken = whisper_token_eot(m_whisperCtx);
 		for (int t = 0; t < n_tokens; ++t) {
+			whisper_token id = whisper_full_get_token_id(m_whisperCtx, s, t);
+			if (id >= eotToken)
+				continue;
+
 			const char *txt = whisper_full_get_token_text(m_whisperCtx, s, t);
 			if (!txt || txt[0] == '\0')
 				continue;
-			whisper_token_data data = whisper_full_get_token_data(m_whisperCtx, s, t);
 			std::string tokenStr(txt);
+			if (tokenStr.rfind("[_", 0) == 0 || tokenStr.rfind("<|", 0) == 0)
+				continue;
+
+			whisper_token_data data = whisper_full_get_token_data(m_whisperCtx, s, t);
 
 			bool isStartOfWord = (tokenStr[0] == ' ' || tokenStr[0] == '\t' || tokenStr[0] == '\n');
 			if (isStartOfWord || segWords.empty()) {

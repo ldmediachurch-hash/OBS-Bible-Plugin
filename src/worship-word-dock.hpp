@@ -63,6 +63,7 @@ private slots:
 	void acceptSuggestion(bool goLive);
 	void dismissSuggestion();
 	void openAudioStatusMenu();
+	void testWithAudioFile();
 	void onRawTranscriptPass(const QString &text, double timestampSec);
 	void onScriptureDetected(const QString &label, int confidence, const QString &status, const QString &kind,
 				 double timestampSec);

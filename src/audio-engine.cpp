@@ -70,6 +70,107 @@ static const ModelDef kModels[] = {
 	 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"},
 };
 
+static bool readWavFile(const QString &filePath, std::vector<float> &out16kMono, double &durationSec)
+{
+	QFile f(filePath);
+	if (!f.open(QIODevice::ReadOnly)) {
+		return false;
+	}
+
+	QByteArray data = f.readAll();
+	f.close();
+
+	if (data.size() < 44) {
+		return false;
+	}
+
+	const char *bytes = data.constData();
+	if (memcmp(bytes, "RIFF", 4) != 0 || memcmp(bytes + 8, "WAVE", 4) != 0) {
+		return false;
+	}
+
+	uint16_t audioFormat = 0;
+	uint16_t numChannels = 0;
+	uint32_t sampleRate = 0;
+	uint16_t bitsPerSample = 0;
+	const char *audioData = nullptr;
+	size_t audioDataSize = 0;
+
+	size_t pos = 12;
+	while (pos + 8 <= static_cast<size_t>(data.size())) {
+		const char *chunkId = bytes + pos;
+		uint32_t chunkSize = *reinterpret_cast<const uint32_t *>(bytes + pos + 4);
+		pos += 8;
+
+		if (memcmp(chunkId, "fmt ", 4) == 0 && chunkSize >= 16) {
+			audioFormat = *reinterpret_cast<const uint16_t *>(bytes + pos);
+			numChannels = *reinterpret_cast<const uint16_t *>(bytes + pos + 2);
+			sampleRate = *reinterpret_cast<const uint32_t *>(bytes + pos + 4);
+			bitsPerSample = *reinterpret_cast<const uint16_t *>(bytes + pos + 14);
+		} else if (memcmp(chunkId, "data", 4) == 0) {
+			audioData = bytes + pos;
+			audioDataSize = chunkSize;
+			break;
+		}
+		pos += chunkSize;
+	}
+
+	if (!audioData || audioDataSize == 0 || sampleRate == 0 || numChannels == 0) {
+		return false;
+	}
+
+	std::vector<float> inFloatMono;
+	size_t numSamples = 0;
+
+	if (audioFormat == 1 && bitsPerSample == 16) {
+		const int16_t *pcm = reinterpret_cast<const int16_t *>(audioData);
+		size_t totalWords = audioDataSize / sizeof(int16_t);
+		numSamples = totalWords / numChannels;
+		inFloatMono.reserve(numSamples);
+
+		for (size_t i = 0; i < numSamples; ++i) {
+			float sum = 0.0f;
+			for (uint16_t ch = 0; ch < numChannels; ++ch) {
+				sum += pcm[i * numChannels + ch] / 32768.0f;
+			}
+			inFloatMono.push_back(sum / numChannels);
+		}
+	} else if (audioFormat == 3 && bitsPerSample == 32) {
+		const float *pcm = reinterpret_cast<const float *>(audioData);
+		numSamples = audioDataSize / (sizeof(float) * numChannels);
+		inFloatMono.reserve(numSamples);
+
+		for (size_t i = 0; i < numSamples; ++i) {
+			float sum = 0.0f;
+			for (uint16_t ch = 0; ch < numChannels; ++ch) {
+				sum += pcm[i * numChannels + ch];
+			}
+			inFloatMono.push_back(sum / numChannels);
+		}
+	} else {
+		return false;
+	}
+
+	durationSec = static_cast<double>(numSamples) / static_cast<double>(sampleRate);
+
+	if (sampleRate == 16000) {
+		out16kMono = std::move(inFloatMono);
+	} else {
+		double ratio = 16000.0 / static_cast<double>(sampleRate);
+		size_t outCount = static_cast<size_t>(numSamples * ratio);
+		out16kMono.resize(outCount);
+		for (size_t i = 0; i < outCount; ++i) {
+			double srcIdx = i / ratio;
+			size_t idx0 = static_cast<size_t>(srcIdx);
+			size_t idx1 = std::min(idx0 + 1, numSamples - 1);
+			float frac = static_cast<float>(srcIdx - idx0);
+			out16kMono[i] = inFloatMono[idx0] * (1.0f - frac) + inFloatMono[idx1] * frac;
+		}
+	}
+
+	return true;
+}
+
 static const ModelDef *findModelDef(const QString &id)
 {
 	for (const auto &m : kModels) {
@@ -424,6 +525,38 @@ void AudioEngine::processAudio(const struct audio_data *data, obs_source_t *sour
 			m_core.pushPcmSamples(resampled, out_frames);
 		}
 	}
+}
+
+void AudioEngine::runAudioFileTest(const QString &filePath)
+{
+	std::vector<float> samples;
+	double duration = 0.0;
+	if (!readWavFile(filePath, samples, duration)) {
+		fprintf(stderr, "[LD Worship & Word] Failed to read audio file: %s\n",
+			filePath.toUtf8().constData());
+		return;
+	}
+
+	fprintf(stderr, "[LD Worship & Word] Running audio file test on: %s (%.1f sec, %zu samples)\n",
+		filePath.toUtf8().constData(), duration, samples.size());
+
+	m_core.reset();
+
+	constexpr size_t kChunkSize = 16000;
+	double streamTime = 0.0;
+
+	for (size_t offset = 0; offset < samples.size(); offset += kChunkSize) {
+		size_t n = std::min(kChunkSize, samples.size() - offset);
+		std::vector<float> chunk(samples.begin() + offset, samples.begin() + offset + n);
+		streamTime += static_cast<double>(n) / 16000.0;
+		m_core.processWindowDirect(chunk, streamTime);
+	}
+
+	std::vector<float> silence(16000, 0.0f);
+	streamTime += 1.0;
+	m_core.processWindowDirect(silence, streamTime);
+
+	fprintf(stderr, "[LD Worship & Word] Audio file test complete.\n");
 }
 
 // 5-bar Mini Signal Meter (Mockup fidelity)
