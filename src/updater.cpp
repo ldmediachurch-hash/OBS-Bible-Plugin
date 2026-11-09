@@ -9,9 +9,12 @@ the Free Software Foundation; either version 2 of the License, or
 */
 
 #include "updater.hpp"
+
+#include <obs-module.h>
+#include <obs-frontend-api.h>
 #include "plugin-support.h"
 
-#include <obs-frontend-api.h>
+#include <cstring>
 
 #include <QDesktopServices>
 #include <QDir>
@@ -217,7 +220,7 @@ void PluginUpdater::onLicenseFinished()
 
 	QJsonArray arr = doc.array();
 	bool foundWorshipPurchase = false;
-	for (const QJsonValue &v : arr) {
+	for (const QJsonValue v : arr) {
 		QJsonObject rec = v.toObject();
 		QString title = rec.value(QStringLiteral("resource_title")).toString();
 		if (title.contains(QStringLiteral("Worship"), Qt::CaseInsensitive) ||
@@ -358,3 +361,4 @@ bool PluginUpdater::launchInstallerAndQuitOBS(const QString &filePath)
 	}
 	return false;
 }
+
