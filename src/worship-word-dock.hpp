@@ -14,11 +14,15 @@ the Free Software Foundation; either version 2 of the License, or
 #include "dock.hpp"
 #include "lyrics-dock.hpp"
 #include "scripture/scripture_detect.hpp"
+#include "updater.hpp"
 
 #include <QWidget>
 
 class QComboBox;
+class QDialog;
 class QLabel;
+class QLineEdit;
+class QProgressBar;
 class QPushButton;
 class QPlainTextEdit;
 class QStackedWidget;
@@ -70,6 +74,18 @@ private slots:
 	void onRawTranscriptPass(const QString &text, double timestampSec);
 	void onScriptureDetected(const QString &label, int confidence, const QString &status, const QString &kind,
 				 double timestampSec);
+
+	// Updater slots
+	void onUpdateCheckFinished(bool updateAvailable, const UpdateInfo &info, bool isSilent);
+	void onUpdateCheckFailed(const QString &errorMessage, bool isSilent);
+	void onUpdateDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
+	void onUpdateDownloadFinished(const QString &filePath);
+	void onUpdateDownloadFailed(const QString &errorMessage);
+	void onLicenseVerificationResult(bool isValid, const QString &message, const QString &email);
+	void onUpdateActionClicked();
+	void onWhatsNewClicked();
+	void onCheckForUpdatesManual();
+	void onOpenLicenseDialog();
 
 protected:
 	void keyPressEvent(QKeyEvent *event) override;
@@ -123,4 +139,24 @@ private:
 	QPushButton *m_transcriptToggleBtn = nullptr;
 	QWidget *m_transcriptContainer = nullptr;
 	QPlainTextEdit *m_transcriptView = nullptr;
+
+	// Auto updater banner & UI
+	QWidget *m_updateBanner = nullptr;
+	QLabel *m_updateLabel = nullptr;
+	QProgressBar *m_updateProgress = nullptr;
+	QPushButton *m_updateActionBtn = nullptr;
+	QPushButton *m_updateWhatsNewBtn = nullptr;
+	QToolButton *m_updateDismissBtn = nullptr;
+	QToolButton *m_settingsBtn = nullptr;
+
+	UpdateInfo m_availableUpdate;
+	QString m_downloadedInstallerPath;
+	QString m_licenseEmail;
+	bool m_isUpdateReadyToInstall = false;
+
+	// License modal dialog
+	QDialog *m_licenseDialog = nullptr;
+	QLineEdit *m_licenseEmailEdit = nullptr;
+	QLabel *m_licenseStatusLabel = nullptr;
+	QPushButton *m_licenseVerifyBtn = nullptr;
 };

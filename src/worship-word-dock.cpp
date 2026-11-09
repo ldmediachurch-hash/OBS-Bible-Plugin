@@ -14,6 +14,8 @@ the Free Software Foundation; either version 2 of the License, or
 #include <obs-module.h>
 
 #include <QComboBox>
+#include <QDesktopServices>
+#include <QDialog>
 #include <QFile>
 #include <QFileDialog>
 #include <QHBoxLayout>
@@ -22,9 +24,12 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStyle>
@@ -75,6 +80,65 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 	auto *root = new QVBoxLayout(this);
 	root->setContentsMargins(6, 6, 6, 6);
 	root->setSpacing(6);
+
+	// 0. Update Banner (Hidden until new version available)
+	m_updateBanner = new QWidget(this);
+	m_updateBanner->setObjectName(QStringLiteral("UpdateBanner"));
+	m_updateBanner->setStyleSheet(QStringLiteral(
+		"QWidget#UpdateBanner { "
+		"  background-color: #1E1B4B; "
+		"  border: 1px solid #6366F1; "
+		"  border-radius: 8px; "
+		"}"));
+	auto *bannerLayout = new QHBoxLayout(m_updateBanner);
+	bannerLayout->setContentsMargins(10, 6, 8, 6);
+	bannerLayout->setSpacing(8);
+
+	m_updateLabel = new QLabel(QStringLiteral("🚀 Update available!"), m_updateBanner);
+	m_updateLabel->setStyleSheet(QStringLiteral("color: #E0E7FF; font-size: 11px; font-weight: 600;"));
+	bannerLayout->addWidget(m_updateLabel, 1);
+
+	m_updateProgress = new QProgressBar(m_updateBanner);
+	m_updateProgress->setFixedHeight(14);
+	m_updateProgress->setRange(0, 100);
+	m_updateProgress->setValue(0);
+	m_updateProgress->setTextVisible(true);
+	m_updateProgress->setStyleSheet(QStringLiteral(
+		"QProgressBar { background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 4px; text-align: center; color: #FFF; font-size: 9px; font-weight: bold; } "
+		"QProgressBar::chunk { background-color: #6366F1; border-radius: 3px; }"));
+	m_updateProgress->setVisible(false);
+	bannerLayout->addWidget(m_updateProgress, 1);
+
+	m_updateWhatsNewBtn = new QPushButton(QStringLiteral("What's New"), m_updateBanner);
+	m_updateWhatsNewBtn->setFixedHeight(24);
+	m_updateWhatsNewBtn->setStyleSheet(QStringLiteral(
+		"QPushButton { background: rgba(255, 255, 255, 0.1); color: #C7D2FE; border: none; border-radius: 4px; padding: 2px 8px; font-size: 11px; } "
+		"QPushButton:hover { background: rgba(255, 255, 255, 0.18); color: #FFFFFF; }"));
+	connect(m_updateWhatsNewBtn, &QPushButton::clicked, this, &WorshipWordDock::onWhatsNewClicked);
+	bannerLayout->addWidget(m_updateWhatsNewBtn);
+
+	m_updateActionBtn = new QPushButton(QStringLiteral("Update Now"), m_updateBanner);
+	m_updateActionBtn->setFixedHeight(24);
+	m_updateActionBtn->setStyleSheet(QStringLiteral(
+		"QPushButton { background-color: #6366F1; color: #FFFFFF; font-weight: bold; border-radius: 4px; padding: 2px 10px; border: none; font-size: 11px; } "
+		"QPushButton:hover { background-color: #4F46E5; } "
+		"QPushButton:pressed { background-color: #4338CA; }"));
+	connect(m_updateActionBtn, &QPushButton::clicked, this, &WorshipWordDock::onUpdateActionClicked);
+	bannerLayout->addWidget(m_updateActionBtn);
+
+	m_updateDismissBtn = new QToolButton(m_updateBanner);
+	m_updateDismissBtn->setText(QStringLiteral("✕"));
+	m_updateDismissBtn->setFixedSize(20, 20);
+	m_updateDismissBtn->setStyleSheet(QStringLiteral(
+		"QToolButton { color: #A5B4FC; border: none; background: transparent; font-size: 11px; font-weight: bold; } "
+		"QToolButton:hover { color: #FFFFFF; background: rgba(255, 255, 255, 0.15); border-radius: 3px; }"));
+	connect(m_updateDismissBtn, &QToolButton::clicked, this, [this]() {
+		m_updateBanner->setVisible(false);
+	});
+	bannerLayout->addWidget(m_updateDismissBtn);
+
+	m_updateBanner->setVisible(false);
+	root->addWidget(m_updateBanner);
 
 	// 1. Top Title & Segmented Control (Worship | Word)
 	m_segmentedContainer = new QWidget(this);
@@ -134,6 +198,17 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 		"QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); }"));
 	connect(m_statusPill, &QPushButton::clicked, this, &WorshipWordDock::openAudioStatusMenu);
 	audioLayout->addWidget(m_statusPill);
+
+	m_settingsBtn = new QToolButton(m_audioRow);
+	m_settingsBtn->setText(QStringLiteral("⚙"));
+	m_settingsBtn->setFixedSize(24, 24);
+	m_settingsBtn->setCursor(Qt::PointingHandCursor);
+	m_settingsBtn->setToolTip(QStringLiteral("Settings, Updates & License"));
+	m_settingsBtn->setStyleSheet(QStringLiteral(
+		"QToolButton { background-color: rgba(255, 255, 255, 0.07); color: #C9CDD4; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1); font-size: 12px; } "
+		"QToolButton:hover { background-color: rgba(255, 255, 255, 0.15); color: #FFF; }"));
+	connect(m_settingsBtn, &QToolButton::clicked, this, &WorshipWordDock::openAudioStatusMenu);
+	audioLayout->addWidget(m_settingsBtn);
 
 	root->addWidget(m_audioRow);
 
@@ -329,6 +404,25 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 	updateTabStyles();
 	updateAudioStatusPill();
 	loadConfig();
+
+	// Connect PluginUpdater signals
+	connect(&PluginUpdater::instance(), &PluginUpdater::updateCheckFinished, this,
+		&WorshipWordDock::onUpdateCheckFinished);
+	connect(&PluginUpdater::instance(), &PluginUpdater::updateCheckFailed, this,
+		&WorshipWordDock::onUpdateCheckFailed);
+	connect(&PluginUpdater::instance(), &PluginUpdater::downloadProgress, this,
+		&WorshipWordDock::onUpdateDownloadProgress);
+	connect(&PluginUpdater::instance(), &PluginUpdater::downloadFinished, this,
+		&WorshipWordDock::onUpdateDownloadFinished);
+	connect(&PluginUpdater::instance(), &PluginUpdater::downloadFailed, this,
+		&WorshipWordDock::onUpdateDownloadFailed);
+	connect(&PluginUpdater::instance(), &PluginUpdater::licenseVerificationResult, this,
+		&WorshipWordDock::onLicenseVerificationResult);
+
+	// Perform silent background check for updates 3 seconds after dock launch
+	QTimer::singleShot(3000, this, []() {
+		PluginUpdater::instance().checkForUpdates(true);
+	});
 }
 
 WorshipWordDock::~WorshipWordDock()
@@ -385,6 +479,10 @@ void WorshipWordDock::updateAudioStatusPill()
 void WorshipWordDock::openAudioStatusMenu()
 {
 	auto *menu = new QMenu(this);
+	menu->addAction(QStringLiteral("🚀 Check for Updates…"), this, &WorshipWordDock::onCheckForUpdatesManual);
+	menu->addAction(QStringLiteral("🔑 License & Account…"), this, &WorshipWordDock::onOpenLicenseDialog);
+	menu->addSeparator();
+
 	menu->addAction(QStringLiteral("Refresh Audio Devices"), this, &WorshipWordDock::refreshAudioSources);
 
 	menu->addSeparator();
@@ -444,7 +542,16 @@ void WorshipWordDock::openAudioStatusMenu()
 	auto *actFeedNote = menu->addAction(QStringLiteral("Tip: Use a dry pastor-mic feed (aux send, pre-fader), not the program mix with music."));
 	actFeedNote->setEnabled(false);
 
-	menu->exec(m_statusPill->mapToGlobal(QPoint(0, m_statusPill->height())));
+	menu->addSeparator();
+	menu->addAction(QStringLiteral("Visit lastdaymedia.com"), []() {
+		QDesktopServices::openUrl(QUrl(QStringLiteral("https://www.lastdaymedia.com/resources")));
+	});
+	auto *actVer = menu->addAction(QStringLiteral("LD Worship & Word v%1").arg(PluginUpdater::currentVersion()));
+	actVer->setEnabled(false);
+
+	QPoint popupPos = m_settingsBtn ? m_settingsBtn->mapToGlobal(QPoint(0, m_settingsBtn->height()))
+					: m_statusPill->mapToGlobal(QPoint(0, m_statusPill->height()));
+	menu->exec(popupPos);
 }
 
 void WorshipWordDock::testWithAudioFile()
@@ -690,6 +797,9 @@ void WorshipWordDock::loadConfig()
 			AudioEngine::instance().setModelChoice(modelId);
 		}
 	}
+	if (obj.contains(QStringLiteral("license_email"))) {
+		m_licenseEmail = obj.value(QStringLiteral("license_email")).toString().trimmed();
+	}
 }
 
 void WorshipWordDock::saveConfig()
@@ -701,6 +811,9 @@ void WorshipWordDock::saveConfig()
 
 	QJsonObject obj;
 	obj[QStringLiteral("model")] = AudioEngine::instance().currentModelChoice();
+	if (!m_licenseEmail.isEmpty()) {
+		obj[QStringLiteral("license_email")] = m_licenseEmail;
+	}
 	file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
 }
 
@@ -756,4 +869,278 @@ void WorshipWordDock::switchToFasterModel()
 	saveConfig();
 	if (m_backlogBar)
 		m_backlogBar->setVisible(false);
+}
+
+void WorshipWordDock::onCheckForUpdatesManual()
+{
+	PluginUpdater::instance().checkForUpdates(false);
+}
+
+void WorshipWordDock::onUpdateCheckFinished(bool updateAvailable, const UpdateInfo &info, bool isSilent)
+{
+	m_availableUpdate = info;
+
+	if (updateAvailable) {
+		m_isUpdateReadyToInstall = false;
+		m_updateLabel->setText(QStringLiteral("🚀 Update v%1 Available").arg(info.latestVersion));
+		m_updateLabel->setVisible(true);
+		m_updateProgress->setVisible(false);
+		m_updateActionBtn->setText(QStringLiteral("Update Now"));
+		m_updateActionBtn->setEnabled(true);
+		m_updateWhatsNewBtn->setVisible(!info.releaseNotes.isEmpty());
+		m_updateDismissBtn->setVisible(true);
+		m_updateBanner->setVisible(true);
+	} else if (!isSilent) {
+		QMessageBox::information(this, QStringLiteral("LD Worship & Word"),
+					 QStringLiteral("You're up to date!\n\nLD Worship & Word v%1 is currently the latest version.")
+						 .arg(PluginUpdater::currentVersion()));
+	}
+}
+
+void WorshipWordDock::onUpdateCheckFailed(const QString &errorMessage, bool isSilent)
+{
+	if (!isSilent) {
+		QMessageBox::warning(
+			this, QStringLiteral("Update Check Failed"),
+			QStringLiteral("Could not check for updates:\n%1\n\nPlease check your internet connection.")
+				.arg(errorMessage));
+	}
+}
+
+void WorshipWordDock::onWhatsNewClicked()
+{
+	QMessageBox box(this);
+	box.setWindowTitle(QStringLiteral("What's New in v%1").arg(m_availableUpdate.latestVersion));
+	box.setTextFormat(Qt::RichText);
+	QString text =
+		QStringLiteral("<h3>LD Worship & Word v%1</h3>"
+			       "<p style='color: #8C93A0;'>Released: %2</p>"
+			       "<hr>"
+			       "<p>%3</p>")
+			.arg(m_availableUpdate.latestVersion,
+			     m_availableUpdate.releaseDate.isEmpty() ? QStringLiteral("Latest Release")
+								    : m_availableUpdate.releaseDate,
+			     m_availableUpdate.releaseNotes);
+	box.setText(text);
+	box.setIcon(QMessageBox::Information);
+	box.exec();
+}
+
+void WorshipWordDock::onUpdateActionClicked()
+{
+	if (m_isUpdateReadyToInstall) {
+		auto res = QMessageBox::question(
+			this, QStringLiteral("Install Update"),
+			QStringLiteral("OBS will close to launch the installer for LD Worship & Word v%1.\n\nReady to close OBS and install now?")
+				.arg(m_availableUpdate.latestVersion),
+			QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+		if (res == QMessageBox::Yes) {
+			PluginUpdater::instance().launchInstallerAndQuitOBS(m_downloadedInstallerPath);
+		}
+		return;
+	}
+
+	if (PluginUpdater::instance().isDownloading()) {
+		PluginUpdater::instance().cancelDownload();
+		m_updateProgress->setVisible(false);
+		m_updateLabel->setVisible(true);
+		m_updateLabel->setText(QStringLiteral("Download cancelled."));
+		m_updateActionBtn->setText(QStringLiteral("Update Now"));
+		return;
+	}
+
+	// If license email is missing or empty, ask user for their purchase email
+	if (m_licenseEmail.isEmpty()) {
+		onOpenLicenseDialog();
+		return;
+	}
+
+	// User has an email configured; verify it and start download
+	m_updateLabel->setText(QStringLiteral("Verifying license for %1…").arg(m_licenseEmail));
+	m_updateActionBtn->setEnabled(false);
+	PluginUpdater::instance().verifyLicense(m_licenseEmail);
+}
+
+void WorshipWordDock::onLicenseVerificationResult(bool isValid, const QString &message, const QString &email)
+{
+	if (m_licenseDialog && m_licenseDialog->isVisible()) {
+		if (m_licenseStatusLabel) {
+			m_licenseStatusLabel->setText(isValid ? QStringLiteral("✅ %1").arg(message)
+							      : QStringLiteral("❌ %1").arg(message));
+			m_licenseStatusLabel->setStyleSheet(isValid ? QStringLiteral("color: #4ADE80; font-size: 11px;")
+								    : QStringLiteral("color: #F87171; font-size: 11px;"));
+		}
+		if (m_licenseVerifyBtn)
+			m_licenseVerifyBtn->setEnabled(true);
+
+		if (isValid) {
+			m_licenseEmail = email.trimmed();
+			saveConfig();
+			QTimer::singleShot(600, m_licenseDialog, &QDialog::accept);
+
+			if (m_availableUpdate.hasUpdate) {
+				m_updateLabel->setText(QStringLiteral("License verified. Starting download…"));
+				m_updateActionBtn->setEnabled(false);
+				PluginUpdater::instance().startDownload();
+			}
+		}
+		return;
+	}
+
+	if (isValid) {
+		m_licenseEmail = email.trimmed();
+		saveConfig();
+		m_updateLabel->setText(QStringLiteral("License verified. Downloading…"));
+		PluginUpdater::instance().startDownload();
+	} else {
+		m_updateLabel->setText(QStringLiteral("License verification required."));
+		m_updateActionBtn->setEnabled(true);
+		m_updateActionBtn->setText(QStringLiteral("Enter License"));
+		onOpenLicenseDialog();
+	}
+}
+
+void WorshipWordDock::onUpdateDownloadProgress(qint64 bytesReceived, qint64 bytesTotal)
+{
+	m_updateLabel->setVisible(false);
+	m_updateProgress->setVisible(true);
+	m_updateActionBtn->setText(QStringLiteral("Cancel"));
+	m_updateActionBtn->setEnabled(true);
+
+	if (bytesTotal > 0) {
+		int pct = static_cast<int>((bytesReceived * 100) / bytesTotal);
+		m_updateProgress->setValue(pct);
+		double mbRec = bytesReceived / (1024.0 * 1024.0);
+		double mbTot = bytesTotal / (1024.0 * 1024.0);
+		m_updateProgress->setFormat(QStringLiteral("Downloading v%1: %2MB / %3MB (%4%)")
+						    .arg(m_availableUpdate.latestVersion,
+							 QString::number(mbRec, 'f', 1),
+							 QString::number(mbTot, 'f', 1),
+							 QString::number(pct)));
+	} else {
+		double mbRec = bytesReceived / (1024.0 * 1024.0);
+		m_updateProgress->setValue(0);
+		m_updateProgress->setFormat(QStringLiteral("Downloading v%1: %2MB…")
+						    .arg(m_availableUpdate.latestVersion,
+							 QString::number(mbRec, 'f', 1)));
+	}
+}
+
+void WorshipWordDock::onUpdateDownloadFinished(const QString &filePath)
+{
+	m_downloadedInstallerPath = filePath;
+	m_isUpdateReadyToInstall = true;
+	m_updateProgress->setVisible(false);
+	m_updateLabel->setVisible(true);
+	m_updateLabel->setText(QStringLiteral("✅ v%1 ready to install").arg(m_availableUpdate.latestVersion));
+	m_updateActionBtn->setText(QStringLiteral("Install & Restart OBS"));
+	m_updateActionBtn->setEnabled(true);
+}
+
+void WorshipWordDock::onUpdateDownloadFailed(const QString &errorMessage)
+{
+	m_updateProgress->setVisible(false);
+	m_updateLabel->setVisible(true);
+	m_updateLabel->setText(QStringLiteral("❌ Download failed"));
+	m_updateActionBtn->setText(QStringLiteral("Retry"));
+	m_updateActionBtn->setEnabled(true);
+
+	QMessageBox::warning(this, QStringLiteral("Download Failed"),
+			     QStringLiteral("Failed to download update:\n%1").arg(errorMessage));
+}
+
+void WorshipWordDock::onOpenLicenseDialog()
+{
+	if (!m_licenseDialog) {
+		m_licenseDialog = new QDialog(this);
+		m_licenseDialog->setWindowTitle(QStringLiteral("LD Worship & Word - License"));
+		m_licenseDialog->setFixedWidth(440);
+		m_licenseDialog->setStyleSheet(QStringLiteral(
+			"QDialog { background-color: #0F1115; color: #FFFFFF; } "
+			"QLabel { color: #E2E8F0; } "
+			"QLineEdit { background-color: #171A21; color: #FFFFFF; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; padding: 6px 10px; font-size: 13px; } "
+			"QLineEdit:focus { border: 1px solid #6366F1; }"));
+
+		auto *layout = new QVBoxLayout(m_licenseDialog);
+		layout->setContentsMargins(18, 18, 18, 18);
+		layout->setSpacing(12);
+
+		auto *titleLabel = new QLabel(QStringLiteral("🔑 Plugin License Verification"), m_licenseDialog);
+		QFont tf = titleLabel->font();
+		tf.setPointSize(14);
+		tf.setBold(true);
+		titleLabel->setFont(tf);
+		layout->addWidget(titleLabel);
+
+		auto *descLabel = new QLabel(
+			QStringLiteral("LD Worship & Word is a commercial plugin for OBS Studio.\n"
+				       "Enter the email address you used when purchasing at lastdaymedia.com "
+				       "to activate automatic in-app updates:"),
+			m_licenseDialog);
+		descLabel->setWordWrap(true);
+		descLabel->setStyleSheet(QStringLiteral("color: #94A3B8; font-size: 12px; line-height: 1.4;"));
+		layout->addWidget(descLabel);
+
+		m_licenseEmailEdit = new QLineEdit(m_licenseDialog);
+		m_licenseEmailEdit->setPlaceholderText(QStringLiteral("e.g. pastor@church.org"));
+		layout->addWidget(m_licenseEmailEdit);
+
+		m_licenseStatusLabel = new QLabel(m_licenseDialog);
+		m_licenseStatusLabel->setWordWrap(true);
+		m_licenseStatusLabel->setStyleSheet(QStringLiteral("font-size: 11px;"));
+		layout->addWidget(m_licenseStatusLabel);
+
+		auto *btnRow = new QHBoxLayout();
+		btnRow->setSpacing(8);
+
+		auto *buyBtn = new QPushButton(QStringLiteral("Buy License"), m_licenseDialog);
+		buyBtn->setStyleSheet(QStringLiteral(
+			"QPushButton { background-color: rgba(255, 255, 255, 0.08); color: #E2E8F0; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; padding: 6px 12px; font-size: 12px; } "
+			"QPushButton:hover { background-color: rgba(255, 255, 255, 0.14); }"));
+		connect(buyBtn, &QPushButton::clicked, []() {
+			QDesktopServices::openUrl(QUrl(QStringLiteral("https://www.lastdaymedia.com/resources")));
+		});
+		btnRow->addWidget(buyBtn);
+
+		btnRow->addStretch(1);
+
+		auto *cancelBtn = new QPushButton(QStringLiteral("Cancel"), m_licenseDialog);
+		cancelBtn->setStyleSheet(QStringLiteral(
+			"QPushButton { background: transparent; color: #94A3B8; border: none; padding: 6px 12px; font-size: 12px; } "
+			"QPushButton:hover { color: #FFF; }"));
+		connect(cancelBtn, &QPushButton::clicked, m_licenseDialog, &QDialog::reject);
+		btnRow->addWidget(cancelBtn);
+
+		m_licenseVerifyBtn = new QPushButton(QStringLiteral("Verify & Activate"), m_licenseDialog);
+		m_licenseVerifyBtn->setStyleSheet(QStringLiteral(
+			"QPushButton { background-color: #6366F1; color: #FFFFFF; font-weight: bold; border-radius: 6px; padding: 6px 16px; font-size: 12px; border: none; } "
+			"QPushButton:hover { background-color: #4F46E5; } "
+			"QPushButton:disabled { background-color: rgba(99, 102, 241, 0.4); color: rgba(255, 255, 255, 0.4); }"));
+		connect(m_licenseVerifyBtn, &QPushButton::clicked, this, [this]() {
+			QString email = m_licenseEmailEdit->text().trimmed();
+			if (email.isEmpty()) {
+				m_licenseStatusLabel->setText(QStringLiteral("Please enter your purchase email address."));
+				m_licenseStatusLabel->setStyleSheet(QStringLiteral("color: #F87171; font-size: 11px;"));
+				return;
+			}
+			m_licenseStatusLabel->setText(QStringLiteral("Verifying with lastdaymedia.com…"));
+			m_licenseStatusLabel->setStyleSheet(QStringLiteral("color: #93C5FD; font-size: 11px;"));
+			m_licenseVerifyBtn->setEnabled(false);
+			PluginUpdater::instance().verifyLicense(email);
+		});
+		btnRow->addWidget(m_licenseVerifyBtn);
+
+		layout->addLayout(btnRow);
+	}
+
+	m_licenseEmailEdit->setText(m_licenseEmail);
+	if (!m_licenseEmail.isEmpty()) {
+		m_licenseStatusLabel->setText(QStringLiteral("Current configured email: %1").arg(m_licenseEmail));
+		m_licenseStatusLabel->setStyleSheet(QStringLiteral("color: #94A3B8; font-size: 11px;"));
+	} else {
+		m_licenseStatusLabel->clear();
+	}
+	m_licenseVerifyBtn->setEnabled(true);
+
+	m_licenseDialog->exec();
 }

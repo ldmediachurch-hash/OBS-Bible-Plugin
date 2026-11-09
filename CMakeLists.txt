@@ -24,8 +24,8 @@ if(ENABLE_FRONTEND_API)
 endif()
 
 if(ENABLE_QT)
-  find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+  find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui Network)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
   target_compile_options(
     ${CMAKE_PROJECT_NAME}
     PRIVATE $<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-quoted-include-in-framework-header -Wno-comma>
@@ -133,6 +133,8 @@ target_sources(
     src/lyrics-dock.hpp
     src/worship-word-dock.cpp
     src/worship-word-dock.hpp
+    src/updater.cpp
+    src/updater.hpp
     src/scripture/scripture_detect.hpp
     src/scripture/scripture_detect.cpp
     src/scripture/scripture_bible_structure.hpp
