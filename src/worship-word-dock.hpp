@@ -30,133 +30,136 @@ class QToolButton;
 
 class ConfidenceBarWidget : public QWidget {
 public:
-	explicit ConfidenceBarWidget(QWidget *parent = nullptr);
-	void setConfidence(int conf);
+  explicit ConfidenceBarWidget(QWidget *parent = nullptr);
+  void setConfidence(int conf);
 
 protected:
-	void paintEvent(QPaintEvent *event) override;
+  void paintEvent(QPaintEvent *event) override;
 
 private:
-	int m_confidence = 95;
+  int m_confidence = 95;
 };
 
 class WorshipWordDock : public QWidget {
-	Q_OBJECT
+  Q_OBJECT
 
 public:
-	static WorshipWordDock *instance() { return s_instance; }
-	explicit WorshipWordDock(QWidget *parent = nullptr);
-	~WorshipWordDock() override;
+  static WorshipWordDock *instance() { return s_instance; }
+  explicit WorshipWordDock(QWidget *parent = nullptr);
+  ~WorshipWordDock() override;
 
-	void showSuggestion(const ldsd::Ref &ref);
+  void showSuggestion(const ldsd::Ref &ref);
 
-	void saveConfig();
+  void saveConfig();
 
-	ScriptureDock *scriptureDock() const { return m_scripture; }
-	LyricsDock *lyricsDock() const { return m_lyrics; }
+  ScriptureDock *scriptureDock() const { return m_scripture; }
+  LyricsDock *lyricsDock() const { return m_lyrics; }
 
 public slots:
-	void setMode(int mode); // 0 = Worship, 1 = Word
-	void toggleMode();
+  void setMode(int mode); // 0 = Worship, 1 = Word
+  void toggleMode();
 
 private slots:
-	void audioSourceChanged(int index);
-	void refreshAudioSources();
-	void onSuggestionDetected(Channel ch, const QString &ref, const QString &text, int confidence, bool tentative,
-				  bool isNextSlide);
-	void acceptSuggestion(bool goLive);
-	void dismissSuggestion();
-	void openAudioStatusMenu();
-	void testWithAudioFile();
-	void saveTranscriptLog();
-	void onBacklogWarning(bool fallingBehind, double backlogSec);
-	void switchToFasterModel();
-	void onRawTranscriptPass(const QString &text, double timestampSec);
-	void onScriptureDetected(const QString &label, int confidence, const QString &status, const QString &kind,
-				 double timestampSec);
+  void audioSourceChanged(int index);
+  void refreshAudioSources();
+  void onSuggestionDetected(Channel ch, const QString &ref, const QString &text,
+                            int confidence, bool tentative, bool isNextSlide);
+  void acceptSuggestion(bool goLive);
+  void dismissSuggestion();
+  void openAudioStatusMenu();
+  void testWithAudioFile();
+  void saveTranscriptLog();
+  void onBacklogWarning(bool fallingBehind, double backlogSec);
+  void switchToFasterModel();
+  void onRawTranscriptPass(const QString &text, double timestampSec);
+  void onScriptureDetected(const QString &label, int confidence,
+                           const QString &status, const QString &kind,
+                           double timestampSec);
 
-	// Updater slots
-	void onUpdateCheckFinished(bool updateAvailable, const UpdateInfo &info, bool isSilent);
-	void onUpdateCheckFailed(const QString &errorMessage, bool isSilent);
-	void onUpdateDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
-	void onUpdateDownloadFinished(const QString &filePath);
-	void onUpdateDownloadFailed(const QString &errorMessage);
-	void onLicenseVerificationResult(bool isValid, const QString &message, const QString &email);
-	void onUpdateActionClicked();
-	void onWhatsNewClicked();
-	void onCheckForUpdatesManual();
-	void onOpenLicenseDialog();
+  // Updater slots
+  void onUpdateCheckFinished(bool updateAvailable, const UpdateInfo &info,
+                             bool isSilent);
+  void onUpdateCheckFailed(const QString &errorMessage, bool isSilent);
+  void onUpdateDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
+  void onUpdateDownloadFinished(const QString &filePath);
+  void onUpdateDownloadFailed(const QString &errorMessage);
+  void onLicenseVerificationResult(bool isValid, const QString &message,
+                                   const QString &email);
+  void onUpdateActionClicked();
+  void onWhatsNewClicked();
+  void onCheckForUpdatesManual();
+  void onOpenLicenseDialog();
 
 protected:
-	void keyPressEvent(QKeyEvent *event) override;
+  void keyPressEvent(QKeyEvent *event) override;
 
 private:
-	void updateTabStyles();
-	void updateAudioStatusPill();
-	void loadConfig();
+  void updateTabStyles();
+  void updateAudioStatusPill();
+  void loadConfig();
 
-	// Mode selector tabs
-	QWidget *m_segmentedContainer = nullptr;
-	QPushButton *m_worshipBtn = nullptr;
-	QPushButton *m_wordBtn = nullptr;
-	QStackedWidget *m_stack = nullptr;
+  // Mode selector tabs
+  QWidget *m_segmentedContainer = nullptr;
+  QPushButton *m_worshipBtn = nullptr;
+  QPushButton *m_wordBtn = nullptr;
+  QStackedWidget *m_stack = nullptr;
 
-	LyricsDock *m_lyrics = nullptr;
-	ScriptureDock *m_scripture = nullptr;
+  LyricsDock *m_lyrics = nullptr;
+  ScriptureDock *m_scripture = nullptr;
 
-	// Audio row
-	QWidget *m_audioRow = nullptr;
-	QLabel *m_micIcon = nullptr;
-	QComboBox *m_audioCombo = nullptr;
-	AudioMeterWidget *m_meter = nullptr;
-	QLabel *m_statusPill = nullptr;
+  // Audio row
+  QWidget *m_audioRow = nullptr;
+  QLabel *m_micIcon = nullptr;
+  QComboBox *m_audioCombo = nullptr;
+  AudioMeterWidget *m_meter = nullptr;
+  QLabel *m_statusPill = nullptr;
 
-	// Suggestion Card
-	QWidget *m_suggestionCard = nullptr;
-	QLabel *m_suggestionKicker = nullptr;
-	QLabel *m_suggestionTitle = nullptr;
-	ConfidenceBarWidget *m_confidenceBar = nullptr;
-	QPushButton *m_previewBtn = nullptr;
-	QPushButton *m_showBtn = nullptr;
-	QToolButton *m_dismissBtn = nullptr;
+  // Suggestion Card
+  QWidget *m_suggestionCard = nullptr;
+  QLabel *m_suggestionKicker = nullptr;
+  QLabel *m_suggestionTitle = nullptr;
+  ConfidenceBarWidget *m_confidenceBar = nullptr;
+  QPushButton *m_previewBtn = nullptr;
+  QPushButton *m_showBtn = nullptr;
+  QToolButton *m_dismissBtn = nullptr;
 
-	Channel m_suggestedChannel = Channel::Scripture;
-	QString m_suggestedRef;
-	QString m_suggestedText;
-	int m_confidence = 0;
-	bool m_isTentative = false;
-	bool m_isNext = false;
+  Channel m_suggestedChannel = Channel::Scripture;
+  QString m_suggestedRef;
+  QString m_suggestedText;
+  int m_confidence = 0;
+  bool m_isTentative = false;
+  bool m_isNext = false;
 
-	ldsd::Ref m_currentScriptureRef;
-	QTimer *m_suggestionTimer = nullptr;
-	static inline WorshipWordDock *s_instance = nullptr;
+  ldsd::Ref m_currentScriptureRef;
+  QTimer *m_suggestionTimer = nullptr;
+  static inline WorshipWordDock *s_instance = nullptr;
 
-	// Backlog guard warning bar
-	QWidget *m_backlogBar = nullptr;
-	QLabel *m_backlogLabel = nullptr;
+  // Backlog guard warning bar
+  QWidget *m_backlogBar = nullptr;
+  QLabel *m_backlogLabel = nullptr;
 
-	// Transcript debug panel
-	QPushButton *m_transcriptToggleBtn = nullptr;
-	QWidget *m_transcriptContainer = nullptr;
-	QPlainTextEdit *m_transcriptView = nullptr;
+  // Transcript debug panel
+  QPushButton *m_transcriptToggleBtn = nullptr;
+  QWidget *m_transcriptContainer = nullptr;
+  QPlainTextEdit *m_transcriptView = nullptr;
 
-	// Auto updater banner & UI
-	QWidget *m_updateBanner = nullptr;
-	QLabel *m_updateLabel = nullptr;
-	QProgressBar *m_updateProgress = nullptr;
-	QPushButton *m_updateActionBtn = nullptr;
-	QPushButton *m_updateWhatsNewBtn = nullptr;
-	QToolButton *m_updateDismissBtn = nullptr;
-	QToolButton *m_settingsBtn = nullptr;
+  // Auto updater banner & UI
+  QWidget *m_updateBanner = nullptr;
+  QLabel *m_updateLabel = nullptr;
+  QProgressBar *m_updateProgress = nullptr;
+  QPushButton *m_updateActionBtn = nullptr;
+  QPushButton *m_updateWhatsNewBtn = nullptr;
+  QToolButton *m_updateDismissBtn = nullptr;
+  QToolButton *m_settingsBtn = nullptr;
 
-	UpdateInfo m_availableUpdate;
-	QString m_downloadedInstallerPath;
-	QString m_licenseEmail;
-	bool m_isUpdateReadyToInstall = false;
+  UpdateInfo m_availableUpdate;
+  QString m_downloadedInstallerPath;
+  QString m_licenseEmail;
+  bool m_isUpdateReadyToInstall = false;
 
-	// License modal dialog
-	QDialog *m_licenseDialog = nullptr;
-	QLineEdit *m_licenseEmailEdit = nullptr;
-	QLabel *m_licenseStatusLabel = nullptr;
-	QPushButton *m_licenseVerifyBtn = nullptr;
+  // License modal dialog
+  QDialog *m_licenseDialog = nullptr;
+  QLineEdit *m_licenseEmailEdit = nullptr;
+  QLabel *m_licenseStatusLabel = nullptr;
+  QPushButton *m_licenseVerifyBtn = nullptr;
 };

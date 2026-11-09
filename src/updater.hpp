@@ -10,12 +10,11 @@ the Free Software Foundation; either version 2 of the License, or
 
 #pragma once
 
+#include <QFile>
 #include <QNetworkAccessManager>
-
-class QFile;
-class QNetworkReply;
-class QProcess;
+#include <QNetworkReply>
 #include <QObject>
+#include <QProcess>
 #include <QString>
 #include <QUrl>
 

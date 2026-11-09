@@ -20,10 +20,12 @@ the Free Software Foundation; either version 2 of the License, or
 
 #include <QDesktopServices>
 #include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QNetworkReply>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSslSocket>
