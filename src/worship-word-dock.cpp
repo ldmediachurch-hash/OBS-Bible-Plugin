@@ -189,7 +189,8 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 	m_showBtn->setStyleSheet(QStringLiteral(
 		"QPushButton { background-color: #FFFFFF; color: #0F1115; font-weight: bold; border-radius: 5px; padding: 2px 12px; border: none; font-size: 11px; } "
 		"QPushButton:hover { background-color: #E2E8F0; } "
-		"QPushButton:pressed { background-color: #CBD5E1; }"));
+		"QPushButton:pressed { background-color: #CBD5E1; } "
+		"QPushButton:disabled { background-color: rgba(255, 255, 255, 0.2); color: rgba(255, 255, 255, 0.4); }"));
 	connect(m_showBtn, &QPushButton::clicked, this, [this]() { acceptSuggestion(true); });
 	cardLayout->addWidget(m_showBtn);
 
@@ -507,6 +508,10 @@ void WorshipWordDock::updateTabStyles()
 void WorshipWordDock::onSuggestionDetected(Channel ch, const QString &ref, const QString &text, int confidence,
 					   bool tentative, bool isNextSlide)
 {
+	if (ch == Channel::Scripture) {
+		return;
+	}
+
 	m_suggestedChannel = ch;
 	m_suggestedRef = ref;
 	m_suggestedText = text;
@@ -566,7 +571,7 @@ void WorshipWordDock::showSuggestion(const ldsd::Ref &ref)
 	}
 
 	if (m_showBtn) {
-		m_showBtn->setEnabled(ref.status != "preview");
+		m_showBtn->setEnabled(true);
 	}
 
 	m_suggestionCard->setVisible(true);
@@ -586,6 +591,9 @@ void WorshipWordDock::showSuggestion(const ldsd::Ref &ref)
 
 void WorshipWordDock::acceptSuggestion(bool goLive)
 {
+	if (m_suggestionTimer) {
+		m_suggestionTimer->stop();
+	}
 	m_suggestionCard->setVisible(false);
 
 	if (m_suggestedChannel == Channel::Lyrics) {
@@ -608,12 +616,13 @@ void WorshipWordDock::acceptSuggestion(bool goLive)
 		}
 		if (bookNum > 0) {
 			m_scripture->openReference(bookNum, m_currentScriptureRef.chapter,
-						   m_currentScriptureRef.verse, m_currentScriptureRef.verseEnd);
+						   m_currentScriptureRef.verse > 0 ? m_currentScriptureRef.verse : 1,
+						   m_currentScriptureRef.verseEnd);
 		} else {
 			m_scripture->showQuery(m_suggestedRef, true);
 		}
 
-		if (goLive && m_currentScriptureRef.status != "preview") {
+		if (goLive) {
 			m_scripture->goLive();
 		}
 	}
@@ -621,6 +630,9 @@ void WorshipWordDock::acceptSuggestion(bool goLive)
 
 void WorshipWordDock::dismissSuggestion()
 {
+	if (m_suggestionTimer) {
+		m_suggestionTimer->stop();
+	}
 	m_suggestionCard->setVisible(false);
 }
 

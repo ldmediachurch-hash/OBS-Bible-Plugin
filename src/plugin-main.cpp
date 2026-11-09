@@ -35,8 +35,6 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
 static WorshipWordDock *g_worship_word_dock = nullptr;
-static ScriptureDock *g_dock = nullptr;
-static LyricsDock *g_lyrics_dock = nullptr;
 
 static QString moduleFile(const char *rel)
 {
@@ -60,10 +58,6 @@ static void frontendEvent(enum obs_frontend_event event, void *)
 	if (event == OBS_FRONTEND_EVENT_EXIT) {
 		if (g_worship_word_dock)
 			g_worship_word_dock->saveConfig();
-		if (g_dock)
-			g_dock->saveConfig();
-		if (g_lyrics_dock)
-			g_lyrics_dock->saveConfig();
 	}
 }
 
@@ -88,14 +82,6 @@ bool obs_module_load(void)
 					 g_worship_word_dock))
 		obs_log(LOG_WARNING, "could not add the LD Worship & Word dock");
 
-	g_dock = new ScriptureDock(main);
-	if (!obs_frontend_add_dock_by_id("ld_scripture_dock", obs_module_text("LDScripture.Dock"), g_dock))
-		obs_log(LOG_WARNING, "could not add the LD Scripture dock");
-
-	g_lyrics_dock = new LyricsDock(main);
-	if (!obs_frontend_add_dock_by_id("ld_lyrics_dock", obs_module_text("LDScripture.LyricsDock"), g_lyrics_dock))
-		obs_log(LOG_WARNING, "could not add the LD Lyrics dock");
-
 	obs_frontend_add_event_callback(frontendEvent, nullptr);
 
 	obs_log(LOG_INFO, "LD Worship & Word loaded (version %s), %d Bibles, %d Songs", PLUGIN_VERSION,
@@ -108,7 +94,5 @@ void obs_module_unload(void)
 {
 	obs_frontend_remove_event_callback(frontendEvent, nullptr);
 	g_worship_word_dock = nullptr;
-	g_dock = nullptr;
-	g_lyrics_dock = nullptr;
 	obs_log(LOG_INFO, "LD Worship & Word unloaded");
 }
