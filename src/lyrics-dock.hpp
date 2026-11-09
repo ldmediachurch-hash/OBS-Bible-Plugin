@@ -68,7 +68,6 @@ private slots:
 	void importSongs();
 	void openSongsFolder();
 	void openGearMenu();
-	void selectCustomModel();
 
 protected:
 	void resizeEvent(QResizeEvent *event) override;

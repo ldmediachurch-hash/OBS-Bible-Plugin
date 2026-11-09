@@ -109,7 +109,7 @@ private:
 	QLabel *m_micIcon = nullptr;
 	QComboBox *m_audioCombo = nullptr;
 	AudioMeterWidget *m_meter = nullptr;
-	QPushButton *m_statusPill = nullptr;
+	QLabel *m_statusPill = nullptr;
 
 	// Suggestion Card
 	QWidget *m_suggestionCard = nullptr;

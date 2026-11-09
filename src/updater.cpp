@@ -14,7 +14,9 @@ the Free Software Foundation; either version 2 of the License, or
 #include <obs-frontend-api.h>
 #include "plugin-support.h"
 
+#include <cmath>
 #include <cstring>
+#include <thread>
 
 #include <QDesktopServices>
 #include <QDir>
@@ -23,9 +25,33 @@ the Free Software Foundation; either version 2 of the License, or
 #include <QJsonObject>
 #include <QMainWindow>
 #include <QProcess>
+#include <QRegularExpression>
+#include <QSslSocket>
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <QUrlQuery>
+
+static bool runCurlGet(const QString &url, const QStringList &headers, QByteArray &outData)
+{
+	QProcess proc;
+	QStringList args;
+	args << QStringLiteral("-s") << QStringLiteral("-L") << QStringLiteral("-f")
+	     << QStringLiteral("--max-time") << QStringLiteral("12");
+	for (const QString &h : headers) {
+		args << QStringLiteral("-H") << h;
+	}
+	args << url;
+	proc.start(QStringLiteral("curl"), args);
+	if (!proc.waitForFinished(14000)) {
+		proc.kill();
+		return false;
+	}
+	if (proc.exitCode() != 0) {
+		return false;
+	}
+	outData = proc.readAllStandardOutput();
+	return true;
+}
 
 PluginUpdater &PluginUpdater::instance()
 {
@@ -88,46 +114,13 @@ bool PluginUpdater::isVersionNewer(const QString &latestVersion, const QString &
 	return false;
 }
 
-void PluginUpdater::checkForUpdates(bool silentIfUpToDate)
+bool PluginUpdater::parseUpdateJson(const QByteArray &data, bool isSilent)
 {
-	if (m_checkReply) {
-		m_checkReply->abort();
-		m_checkReply->deleteLater();
-		m_checkReply = nullptr;
-	}
-
-	m_checkIsSilent = silentIfUpToDate;
-
-	QUrl url(QStringLiteral("https://www.lastdaymedia.com/plugin-update.json"));
-	QNetworkRequest req(url);
-	req.setHeader(QNetworkRequest::UserAgentHeader,
-		      QStringLiteral("LD-Worship-and-Word/%1 (%2)").arg(currentVersion(), QSysInfo::prettyProductName()));
-	req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-	m_checkReply = m_nam.get(req);
-	connect(m_checkReply, &QNetworkReply::finished, this, &PluginUpdater::onCheckFinished);
-}
-
-void PluginUpdater::onCheckFinished()
-{
-	if (!m_checkReply)
-		return;
-
-	QNetworkReply *reply = m_checkReply;
-	m_checkReply = nullptr;
-	reply->deleteLater();
-
-	if (reply->error() != QNetworkReply::NoError) {
-		emit updateCheckFailed(reply->errorString(), m_checkIsSilent);
-		return;
-	}
-
-	QByteArray data = reply->readAll();
 	QJsonParseError err;
 	QJsonDocument doc = QJsonDocument::fromJson(data, &err);
 	if (err.error != QJsonParseError::NoError || !doc.isObject()) {
-		emit updateCheckFailed(QStringLiteral("Invalid update metadata format"), m_checkIsSilent);
-		return;
+		emit updateCheckFailed(QStringLiteral("Invalid update metadata format"), isSilent);
+		return false;
 	}
 
 	QJsonObject obj = doc.object();
@@ -150,7 +143,113 @@ void PluginUpdater::onCheckFinished()
 
 	m_cachedInfo.hasUpdate = isVersionNewer(m_cachedInfo.latestVersion, currentVersion());
 
-	emit updateCheckFinished(m_cachedInfo.hasUpdate, m_cachedInfo, m_checkIsSilent);
+	emit updateCheckFinished(m_cachedInfo.hasUpdate, m_cachedInfo, isSilent);
+	return true;
+}
+
+void PluginUpdater::checkForUpdates(bool silentIfUpToDate)
+{
+	if (m_checkReply) {
+		m_checkReply->abort();
+		m_checkReply->deleteLater();
+		m_checkReply = nullptr;
+	}
+
+	m_checkIsSilent = silentIfUpToDate;
+
+	const QString urlStr = QStringLiteral("https://www.lastdaymedia.com/plugin-update.json");
+
+	if (!QSslSocket::supportsSsl()) {
+		std::thread([this, silentIfUpToDate, urlStr]() {
+			QByteArray data;
+			QStringList headers;
+			headers << QStringLiteral("User-Agent: LD-Worship-and-Word/%1").arg(currentVersion());
+			if (runCurlGet(urlStr, headers, data)) {
+				QMetaObject::invokeMethod(this, [this, data, silentIfUpToDate]() {
+					parseUpdateJson(data, silentIfUpToDate);
+				}, Qt::QueuedConnection);
+			} else {
+				QMetaObject::invokeMethod(this, [this, silentIfUpToDate]() {
+					emit updateCheckFailed(QStringLiteral("Failed to fetch update metadata"), silentIfUpToDate);
+				}, Qt::QueuedConnection);
+			}
+		}).detach();
+		return;
+	}
+
+	QUrl url(urlStr);
+	QNetworkRequest req(url);
+	req.setHeader(QNetworkRequest::UserAgentHeader,
+		      QStringLiteral("LD-Worship-and-Word/%1 (%2)").arg(currentVersion(), QSysInfo::prettyProductName()));
+	req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+
+	m_checkReply = m_nam.get(req);
+	connect(m_checkReply, &QNetworkReply::finished, this, &PluginUpdater::onCheckFinished);
+}
+
+void PluginUpdater::onCheckFinished()
+{
+	if (!m_checkReply)
+		return;
+
+	QNetworkReply *reply = m_checkReply;
+	m_checkReply = nullptr;
+	reply->deleteLater();
+
+	if (reply->error() != QNetworkReply::NoError) {
+		const QString urlStr = QStringLiteral("https://www.lastdaymedia.com/plugin-update.json");
+		bool silent = m_checkIsSilent;
+		std::thread([this, silent, urlStr]() {
+			QByteArray data;
+			QStringList headers;
+			headers << QStringLiteral("User-Agent: LD-Worship-and-Word/%1").arg(currentVersion());
+			if (runCurlGet(urlStr, headers, data)) {
+				QMetaObject::invokeMethod(this, [this, data, silent]() {
+					parseUpdateJson(data, silent);
+				}, Qt::QueuedConnection);
+			} else {
+				QMetaObject::invokeMethod(this, [this, silent]() {
+					emit updateCheckFailed(QStringLiteral("Failed to reach update server"), silent);
+				}, Qt::QueuedConnection);
+			}
+		}).detach();
+		return;
+	}
+
+	parseUpdateJson(reply->readAll(), m_checkIsSilent);
+}
+
+bool PluginUpdater::parseLicenseJson(const QByteArray &data, const QString &email)
+{
+	QJsonDocument doc = QJsonDocument::fromJson(data);
+	if (!doc.isArray()) {
+		emit licenseVerificationResult(false, QStringLiteral("Unexpected verification server response."),
+					       email);
+		return false;
+	}
+
+	QJsonArray arr = doc.array();
+	bool foundWorshipPurchase = false;
+	for (const QJsonValue v : arr) {
+		QJsonObject rec = v.toObject();
+		QString title = rec.value(QStringLiteral("resource_title")).toString();
+		if (title.contains(QStringLiteral("Worship"), Qt::CaseInsensitive) ||
+		    title.contains(QStringLiteral("Plugin"), Qt::CaseInsensitive) ||
+		    title.contains(QStringLiteral("LD Scripture"), Qt::CaseInsensitive)) {
+			foundWorshipPurchase = true;
+			break;
+		}
+	}
+
+	if (foundWorshipPurchase) {
+		emit licenseVerificationResult(true, QStringLiteral("Purchase verified successfully!"),
+					       email);
+	} else {
+		emit licenseVerificationResult(
+			false, QStringLiteral("No matching purchase found for this email on lastdaymedia.com."),
+			email);
+	}
+	return true;
 }
 
 void PluginUpdater::verifyLicense(const QString &email)
@@ -184,6 +283,28 @@ void PluginUpdater::verifyLicense(const QString &email)
 	query.addQueryItem(QStringLiteral("select"), QStringLiteral("id,resource_title,created_at"));
 	url.setQuery(query);
 
+	QString endpoint = url.toString();
+	QStringList headers;
+	headers << QStringLiteral("apikey: %1").arg(anonKey);
+	headers << QStringLiteral("Authorization: Bearer %1").arg(anonKey);
+	headers << QStringLiteral("User-Agent: LD-Worship-and-Word/%1").arg(currentVersion());
+
+	if (!QSslSocket::supportsSsl()) {
+		std::thread([this, vEmail = m_verifyingEmail, endpoint, headers]() {
+			QByteArray data;
+			if (runCurlGet(endpoint, headers, data)) {
+				QMetaObject::invokeMethod(this, [this, data, vEmail]() {
+					parseLicenseJson(data, vEmail);
+				}, Qt::QueuedConnection);
+			} else {
+				QMetaObject::invokeMethod(this, [this, vEmail]() {
+					emit licenseVerificationResult(false, QStringLiteral("Could not reach verification server."), vEmail);
+				}, Qt::QueuedConnection);
+			}
+		}).detach();
+		return;
+	}
+
 	QNetworkRequest req(url);
 	req.setRawHeader("apikey", anonKey.toUtf8());
 	req.setRawHeader("Authorization", "Bearer " + anonKey.toUtf8());
@@ -204,41 +325,41 @@ void PluginUpdater::onLicenseFinished()
 	reply->deleteLater();
 
 	if (reply->error() != QNetworkReply::NoError) {
-		emit licenseVerificationResult(
-			false, QStringLiteral("Could not reach verification server: %1").arg(reply->errorString()),
-			m_verifyingEmail);
+		QString supaUrl = m_cachedInfo.supabaseUrl;
+		if (supaUrl.isEmpty())
+			supaUrl = QStringLiteral("https://eduaomfieovlzzrwgsct.supabase.co");
+		QString anonKey = m_cachedInfo.supabaseAnonKey;
+		if (anonKey.isEmpty())
+			anonKey = QStringLiteral(
+				"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkdWFvbWZpZW92bHp6cndnc2N0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI5NDE1NzUsImV4cCI6MjA5ODUxNzU3NX0.o2mr8eMX-67lMVISPOO5Re12tMBRWodPKg_Xc3U4WnY");
+
+		QUrl url(supaUrl + QStringLiteral("/rest/v1/leads"));
+		QUrlQuery query;
+		query.addQueryItem(QStringLiteral("email"), QStringLiteral("eq.") + m_verifyingEmail.toLower());
+		query.addQueryItem(QStringLiteral("select"), QStringLiteral("id,resource_title,created_at"));
+		url.setQuery(query);
+
+		QString endpoint = url.toString();
+		QStringList headers;
+		headers << QStringLiteral("apikey: %1").arg(anonKey);
+		headers << QStringLiteral("Authorization: Bearer %1").arg(anonKey);
+
+		std::thread([this, vEmail = m_verifyingEmail, endpoint, headers]() {
+			QByteArray data;
+			if (runCurlGet(endpoint, headers, data)) {
+				QMetaObject::invokeMethod(this, [this, data, vEmail]() {
+					parseLicenseJson(data, vEmail);
+				}, Qt::QueuedConnection);
+			} else {
+				QMetaObject::invokeMethod(this, [this, vEmail]() {
+					emit licenseVerificationResult(false, QStringLiteral("Could not reach verification server."), vEmail);
+				}, Qt::QueuedConnection);
+			}
+		}).detach();
 		return;
 	}
 
-	QByteArray data = reply->readAll();
-	QJsonDocument doc = QJsonDocument::fromJson(data);
-	if (!doc.isArray()) {
-		emit licenseVerificationResult(false, QStringLiteral("Unexpected verification server response."),
-					       m_verifyingEmail);
-		return;
-	}
-
-	QJsonArray arr = doc.array();
-	bool foundWorshipPurchase = false;
-	for (const QJsonValue v : arr) {
-		QJsonObject rec = v.toObject();
-		QString title = rec.value(QStringLiteral("resource_title")).toString();
-		if (title.contains(QStringLiteral("Worship"), Qt::CaseInsensitive) ||
-		    title.contains(QStringLiteral("Plugin"), Qt::CaseInsensitive) ||
-		    title.contains(QStringLiteral("LD Scripture"), Qt::CaseInsensitive)) {
-			foundWorshipPurchase = true;
-			break;
-		}
-	}
-
-	if (foundWorshipPurchase) {
-		emit licenseVerificationResult(true, QStringLiteral("Purchase verified successfully!"),
-					       m_verifyingEmail);
-	} else {
-		emit licenseVerificationResult(
-			false, QStringLiteral("No matching purchase found for this email on lastdaymedia.com."),
-			m_verifyingEmail);
-	}
+	parseLicenseJson(reply->readAll(), m_verifyingEmail);
 }
 
 void PluginUpdater::startDownload(const QString &targetFilename)
@@ -269,6 +390,50 @@ void PluginUpdater::startDownload(const QString &targetFilename)
 
 	QString tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
 	m_downloadPath = QDir(tempDir).filePath(filename);
+
+	if (!QSslSocket::supportsSsl()) {
+		m_curlDownloading = true;
+		emit downloadProgress(0, 100);
+
+		m_curlProc = new QProcess(this);
+		connect(m_curlProc, &QProcess::readyReadStandardError, [this]() {
+			if (!m_curlProc)
+				return;
+			QByteArray err = m_curlProc->readAllStandardError();
+			static QRegularExpression rx(QStringLiteral(R"((\d{1,3}(?:\.\d+)?)%)"));
+			QRegularExpressionMatchIterator it = rx.globalMatch(QString::fromUtf8(err));
+			int lastPct = -1;
+			while (it.hasNext()) {
+				auto match = it.next();
+				lastPct = static_cast<int>(std::round(match.captured(1).toDouble()));
+			}
+			if (lastPct >= 0) {
+				emit downloadProgress(lastPct, 100);
+			}
+		});
+
+		connect(m_curlProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+			[this](int exitCode, QProcess::ExitStatus) {
+				m_curlDownloading = false;
+				if (m_curlProc) {
+					m_curlProc->deleteLater();
+					m_curlProc = nullptr;
+				}
+				if (exitCode == 0 && QFile::exists(m_downloadPath)) {
+					emit downloadProgress(100, 100);
+					emit downloadFinished(m_downloadPath);
+				} else {
+					QFile::remove(m_downloadPath);
+					emit downloadFailed(QStringLiteral("Download interrupted or failed."));
+				}
+			});
+
+		QStringList args;
+		args << QStringLiteral("-#") << QStringLiteral("-L") << QStringLiteral("-o") << m_downloadPath
+		     << m_cachedInfo.downloadUrl;
+		m_curlProc->start(QStringLiteral("curl"), args);
+		return;
+	}
 
 	m_downloadFile = new QFile(m_downloadPath, this);
 	if (!m_downloadFile->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -325,6 +490,12 @@ void PluginUpdater::onDownloadFinished()
 
 void PluginUpdater::cancelDownload()
 {
+	if (m_curlProc) {
+		m_curlProc->kill();
+		m_curlProc->deleteLater();
+		m_curlProc = nullptr;
+		m_curlDownloading = false;
+	}
 	if (m_downloadReply) {
 		m_downloadReply->abort();
 		m_downloadReply->deleteLater();

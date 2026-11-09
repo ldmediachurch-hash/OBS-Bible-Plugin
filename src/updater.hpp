@@ -10,9 +10,11 @@ the Free Software Foundation; either version 2 of the License, or
 
 #pragma once
 
-#include <QFile>
 #include <QNetworkAccessManager>
-#include <QNetworkReply>
+
+class QFile;
+class QNetworkReply;
+class QProcess;
 #include <QObject>
 #include <QString>
 #include <QUrl>
@@ -50,7 +52,10 @@ public:
 	bool launchInstallerAndQuitOBS(const QString &filePath);
 
 	const UpdateInfo &cachedInfo() const { return m_cachedInfo; }
-	bool isDownloading() const { return m_downloadReply != nullptr; }
+	bool isDownloading() const { return m_downloadReply != nullptr || m_curlDownloading; }
+
+	bool parseUpdateJson(const QByteArray &data, bool isSilent);
+	bool parseLicenseJson(const QByteArray &data, const QString &email);
 
 signals:
 	void updateCheckFinished(bool updateAvailable, const UpdateInfo &info, bool isSilent);
@@ -80,4 +85,7 @@ private:
 	QNetworkReply *m_downloadReply = nullptr;
 	QFile *m_downloadFile = nullptr;
 	QString m_downloadPath;
+	bool m_curlDownloading = false;
+	QProcess *m_curlProc = nullptr;
 };
+

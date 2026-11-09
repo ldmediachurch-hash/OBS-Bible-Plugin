@@ -190,13 +190,11 @@ WorshipWordDock::WorshipWordDock(QWidget *parent) : QWidget(parent)
 	m_meter = new AudioMeterWidget(m_audioRow);
 	audioLayout->addWidget(m_meter);
 
-	m_statusPill = new QPushButton(m_audioRow);
+	m_statusPill = new QLabel(m_audioRow);
 	m_statusPill->setFixedHeight(24);
-	m_statusPill->setCursor(Qt::PointingHandCursor);
+	m_statusPill->setAlignment(Qt::AlignCenter);
 	m_statusPill->setStyleSheet(QStringLiteral(
-		"QPushButton { background-color: rgba(255, 255, 255, 0.07); color: #C9CDD4; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(255, 255, 255, 0.1); font-size: 11px; font-weight: 500; } "
-		"QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); }"));
-	connect(m_statusPill, &QPushButton::clicked, this, &WorshipWordDock::openAudioStatusMenu);
+		"QLabel { background-color: rgba(255, 255, 255, 0.07); color: #C9CDD4; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(255, 255, 255, 0.1); font-size: 11px; font-weight: 500; }"));
 	audioLayout->addWidget(m_statusPill);
 
 	m_settingsBtn = new QToolButton(m_audioRow);
@@ -460,19 +458,19 @@ void WorshipWordDock::updateAudioStatusPill()
 		m_statusPill->setText(
 			QStringLiteral("● Downloading (%1%)").arg(AudioEngine::instance().downloadPercent()));
 		m_statusPill->setStyleSheet(QStringLiteral(
-			"QPushButton { background-color: rgba(59, 130, 246, 0.15); color: #60A5FA; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 11px; font-weight: 500; }"));
+			"QLabel { background-color: rgba(59, 130, 246, 0.15); color: #60A5FA; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 11px; font-weight: 500; }"));
 	} else if (!AudioEngine::instance().isModelLoaded()) {
 		m_statusPill->setText(QStringLiteral("● Loading model"));
 		m_statusPill->setStyleSheet(QStringLiteral(
-			"QPushButton { background-color: rgba(245, 158, 11, 0.15); color: #F59E0B; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(245, 158, 11, 0.3); font-size: 11px; font-weight: 500; }"));
+			"QLabel { background-color: rgba(245, 158, 11, 0.15); color: #F59E0B; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(245, 158, 11, 0.3); font-size: 11px; font-weight: 500; }"));
 	} else if (AudioEngine::instance().isListening()) {
 		m_statusPill->setText(QStringLiteral("● Listening"));
 		m_statusPill->setStyleSheet(QStringLiteral(
-			"QPushButton { background-color: rgba(16, 185, 129, 0.15); color: #10B981; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 11px; font-weight: 500; }"));
+			"QLabel { background-color: rgba(16, 185, 129, 0.15); color: #10B981; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 11px; font-weight: 500; }"));
 	} else {
 		m_statusPill->setText(QStringLiteral("● Off"));
 		m_statusPill->setStyleSheet(QStringLiteral(
-			"QPushButton { background-color: rgba(255, 255, 255, 0.07); color: #8C93A0; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(255, 255, 255, 0.1); font-size: 11px; font-weight: 500; }"));
+			"QLabel { background-color: rgba(255, 255, 255, 0.07); color: #8C93A0; border-radius: 12px; padding: 2px 10px; border: 1px solid rgba(255, 255, 255, 0.1); font-size: 11px; font-weight: 500; }"));
 	}
 }
 
@@ -550,7 +548,7 @@ void WorshipWordDock::openAudioStatusMenu()
 	actVer->setEnabled(false);
 
 	QPoint popupPos = m_settingsBtn ? m_settingsBtn->mapToGlobal(QPoint(0, m_settingsBtn->height()))
-					: m_statusPill->mapToGlobal(QPoint(0, m_statusPill->height()));
+					: mapToGlobal(QPoint(0, 0));
 	menu->exec(popupPos);
 }
 
@@ -850,7 +848,7 @@ void WorshipWordDock::onBacklogWarning(bool fallingBehind, double backlogSec)
 		if (fallingBehind) {
 			m_statusPill->setText(QStringLiteral("Falling behind"));
 			m_statusPill->setStyleSheet(QStringLiteral(
-				"QPushButton { background: #DC2626; color: #FFF; border: none; "
+				"QLabel { background: #DC2626; color: #FFF; border: none; "
 				"border-radius: 10px; padding: 2px 8px; font-size: 10px; font-weight: bold; }"));
 		} else {
 			updateAudioStatusPill();

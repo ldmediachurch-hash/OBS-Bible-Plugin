@@ -328,7 +328,7 @@ void LyricsDock::setupLayout()
 
 	gearBtn = new QToolButton(this);
 	gearBtn->setIcon(QIcon(QStringLiteral(":/icons/gear.svg")));
-	gearBtn->setToolTip(QStringLiteral("Settings & Model Options"));
+	gearBtn->setToolTip(QStringLiteral("Lyrics & Automation Settings"));
 	gearBtn->setFixedSize(30, 30);
 	connect(gearBtn, &QToolButton::clicked, this, &LyricsDock::openGearMenu);
 	searchRow->addWidget(gearBtn);
@@ -576,21 +576,6 @@ void LyricsDock::openGearMenu()
 		connect(act, &QAction::triggered, this, [this, l]() { setLinesPerSlide(l); });
 	}
 
-	// Model Selection
-	auto *modelSub = menu->addMenu(QStringLiteral("Speech model"));
-	auto *actBase = modelSub->addAction(QStringLiteral("base.en-q5_1 (Built-in)"));
-	auto *actCustom = modelSub->addAction(QStringLiteral("Browse model file…"));
-
-	connect(actBase, &QAction::triggered, this, []() { AudioEngine::instance().loadModel(); });
-	connect(actCustom, &QAction::triggered, this, &LyricsDock::selectCustomModel);
-
-	// Hardware backend info
-	QString backend = AudioEngine::instance().core().backendInfo();
-	if (backend.isEmpty())
-		backend = QStringLiteral("CPU");
-	auto *actBackend = menu->addAction(QStringLiteral("Backend: %1").arg(backend));
-	actBackend->setEnabled(false);
-
 	menu->addSeparator();
 
 	// Follow Mode Checkbox
@@ -608,15 +593,6 @@ void LyricsDock::openGearMenu()
 		[](bool checked) { AudioEngine::instance().core().setAutoAdvance(checked); });
 
 	menu->exec(gearBtn->mapToGlobal(QPoint(0, gearBtn->height())));
-}
-
-void LyricsDock::selectCustomModel()
-{
-	QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Select Whisper Model"), QString(),
-						    QStringLiteral("GGML Models (*.bin);;All Files (*)"));
-	if (!path.isEmpty()) {
-		AudioEngine::instance().loadModelFile(path);
-	}
 }
 
 void LyricsDock::setLinesPerSlide(int lines)
