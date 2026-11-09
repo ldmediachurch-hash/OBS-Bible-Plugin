@@ -359,9 +359,16 @@ void LyricsDock::setupLayout()
 	libraryHeaderLabel->setStyleSheet(QStringLiteral("color: #8C93A0;"));
 	libHeaderRow->addWidget(libraryHeaderLabel, 1);
 
+	const QString dropBtnStyle = QStringLiteral(
+		"QToolButton { background-color: rgba(255, 255, 255, 0.08); color: #C9CDD4; border-radius: 4px; padding: 2px 18px 2px 8px; border: 1px solid rgba(255, 255, 255, 0.12); font-size: 11px; font-weight: 500; } "
+		"QToolButton:hover { background-color: rgba(255, 255, 255, 0.14); color: #FFF; border-color: rgba(255, 255, 255, 0.2); } "
+		"QToolButton::menu-indicator { subcontrol-origin: padding; subcontrol-position: center right; right: 5px; top: 0px; width: 8px; height: 8px; }");
+
 	importBtn = new QToolButton(scrollContent);
-	importBtn->setText(QStringLiteral("Import ▾"));
+	importBtn->setText(QStringLiteral("Import"));
 	importBtn->setPopupMode(QToolButton::InstantPopup);
+	importBtn->setStyleSheet(dropBtnStyle);
+	importBtn->setCursor(Qt::PointingHandCursor);
 	auto *importMenu = new QMenu(importBtn);
 	importMenu->addAction(QStringLiteral("Import Songs (OpenLyrics/OpenSong/JSON/Text)…"), this,
 			      &LyricsDock::importSongs);
@@ -389,8 +396,10 @@ void LyricsDock::setupLayout()
 	slidesHeaderRow->addWidget(slidesHeaderLabel, 1);
 
 	linesBtn = new QToolButton(scrollContent);
-	linesBtn->setText(QStringLiteral("2 lines ▾"));
+	linesBtn->setText(QStringLiteral("2 lines"));
 	linesBtn->setPopupMode(QToolButton::InstantPopup);
+	linesBtn->setStyleSheet(dropBtnStyle);
+	linesBtn->setCursor(Qt::PointingHandCursor);
 	auto *linesMenu = new QMenu(linesBtn);
 	auto *act1 = linesMenu->addAction(QStringLiteral("1 line"));
 	auto *act2 = linesMenu->addAction(QStringLiteral("2 lines"));
@@ -600,7 +609,7 @@ void LyricsDock::setLinesPerSlide(int lines)
 	if (lines < 1 || lines > 4)
 		return;
 	linesPerSlide = lines;
-	linesBtn->setText(QStringLiteral("%1 lines ▾").arg(lines));
+	linesBtn->setText(QStringLiteral("%1 line%2").arg(lines).arg(lines > 1 ? "s" : ""));
 	rebuildSlides();
 }
 
