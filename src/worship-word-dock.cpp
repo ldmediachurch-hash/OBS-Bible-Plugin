@@ -564,7 +564,7 @@ void WorshipWordDock::showSuggestion(const ldsd::Ref &ref)
 	}
 
 	m_suggestionKicker->setText(kicker);
-	m_suggestionTitle->setText(QStringLiteral("%1 %2%").arg(QString::fromStdString(ref.label)).arg(m_confidence));
+	m_suggestionTitle->setText(QString::fromStdString(ref.label));
 
 	if (m_confidenceBar) {
 		m_confidenceBar->setConfidence(m_confidence);

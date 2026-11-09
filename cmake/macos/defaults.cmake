@@ -32,7 +32,7 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 # Enable RPATH support for generated binaries
 set(CMAKE_MACOSX_RPATH TRUE)
 # Use RPATHs from build tree _in_ the build tree
-set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 # Do not add default linker search paths to RPATH
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 # Use common bundle-relative RPATH for installed targets
